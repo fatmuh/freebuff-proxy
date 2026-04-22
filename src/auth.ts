@@ -1,0 +1,142 @@
+import { request } from 'undici'
+import { randomBytes, createHash } from 'node:crypto'
+import { sleep } from './utils.js'
+
+// ─── Auth Flow ─────────────────────────────────────────────────
+// Handles the CLI auth flow against freebuff.com:
+// 1. Generate fingerprint → POST /api/auth/cli/code
+// 2. Show login URL to user
+// 3. Poll GET /api/auth/cli/status every 3s until authenticated
+// 4. Return the authToken from the user object
+
+interface AuthCodeResponse {
+  fingerprintId: string
+  fingerprintHash: string
+  loginUrl: string
+  expiresAt: number
+}
+
+interface AuthStatusUser {
+  id: string
+  name: string
+  email: string
+  authToken: string
+  fingerprintId: string
+  fingerprintHash: string
+}
+
+interface AuthStatusResponse {
+  user: AuthStatusUser
+  message: string
+}
+
+// ─── Fingerprint Generation ────────────────────────────────────
+// Generate a fingerprint matching: enhanced-{base64url-random}
+// The hash is SHA-256 of the fingerprintId
+
+function generateFingerprintId(): string {
+  const buf = randomBytes(32)
+  const b64 = buf.toString('base64url')
+  return `enhanced-${b64}`
+}
+
+function hashFingerprint(fingerprintId: string): string {
+  return createHash('sha256').update(fingerprintId).digest('hex')
+}
+
+// ─── HTTP Helpers ──────────────────────────────────────────────
+
+const AUTH_BASE = 'https://www.freebuff.com'
+const AUTH_USER_AGENT = 'Bun/1.3.11'
+
+async function authPost(path: string, body: unknown): Promise<{ statusCode: number; data: unknown }> {
+  const url = `${AUTH_BASE}${path}`
+  const { statusCode, body: respBody } = await request(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'accept': '*/*',
+      'user-agent': AUTH_USER_AGENT,
+    },
+    body: JSON.stringify(body),
+  })
+  const text = await respBody.text()
+  let data: unknown
+  try { data = JSON.parse(text) } catch { data = text }
+  return { statusCode, data }
+}
+
+async function authGet(path: string): Promise<{ statusCode: number; data: unknown }> {
+  const url = `${AUTH_BASE}${path}`
+  const { statusCode, body: respBody } = await request(url, {
+    method: 'GET',
+    headers: {
+      'accept': '*/*',
+      'user-agent': AUTH_USER_AGENT,
+    },
+  })
+  const text = await respBody.text()
+  let data: unknown
+  try { data = JSON.parse(text) } catch { data = text }
+  return { statusCode, data }
+}
+
+// ─── Main Auth Flow ───────────────────────────────────────────
+
+export async function authenticate(log: (...args: unknown[]) => void): Promise<string> {
+  const fingerprintId = generateFingerprintId()
+  const fingerprintHash = hashFingerprint(fingerprintId)
+
+  // Step 1: POST /api/auth/cli/code → get login URL
+  log('requesting login code...')
+  const codeResp = await authPost('/api/auth/cli/code', { fingerprintId })
+
+  if (codeResp.statusCode !== 200) {
+    throw new Error(`auth: failed to get login code (status ${codeResp.statusCode}): ${JSON.stringify(codeResp.data)}`)
+  }
+
+  const codeData = codeResp.data as AuthCodeResponse
+  const loginUrl = codeData.loginUrl
+  const expiresAt = codeData.expiresAt
+
+  if (!loginUrl) {
+    throw new Error(`auth: no loginUrl in response: ${JSON.stringify(codeData)}`)
+  }
+
+  // Step 2: Show login URL to user
+  log('')
+  log('╔══════════════════════════════════════════════════════════════╗')
+  log('║  Please log in to authenticate:                            ║')
+  log('╚══════════════════════════════════════════════════════════════╝')
+  log('')
+  log(`  ${loginUrl}`)
+  log('')
+  log('  Waiting for authentication...')
+
+  // Step 3: Poll GET /api/auth/cli/status every 3s
+  const pollInterval = 3_000
+  const expiresTime = expiresAt || Date.now() + 10 * 60 * 1000
+  const statusPath = `/api/auth/cli/status?fingerprintId=${encodeURIComponent(fingerprintId)}&fingerprintHash=${encodeURIComponent(fingerprintHash)}&expiresAt=${expiresAt}`
+
+  while (Date.now() < expiresTime) {
+    await sleep(pollInterval)
+
+    const statusResp = await authGet(statusPath)
+
+    if (statusResp.statusCode === 200) {
+      const statusData = statusResp.data as AuthStatusResponse
+      if (statusData.user?.authToken) {
+        log('')
+        log(`auth: ✅ authenticated as ${statusData.user.name} (${statusData.user.email})`)
+        return statusData.user.authToken
+      }
+    }
+
+    // 401 = not yet authenticated, keep polling
+    if (statusResp.statusCode !== 401) {
+      log(`auth: unexpected status ${statusResp.statusCode}, retrying...`)
+    }
+  }
+
+  throw new Error('auth: timed out waiting for login')
+}

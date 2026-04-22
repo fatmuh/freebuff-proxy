@@ -87,7 +87,7 @@ export async function loadConfig(configPath?: string): Promise<Config> {
   // Validate
   if (!cfg.listenAddr) throw new Error('LISTEN_ADDR cannot be empty')
   if (!cfg.upstreamBaseURL) throw new Error('UPSTREAM_BASE_URL cannot be empty')
-  if (cfg.authTokens.length === 0) throw new Error('at least one AUTH_TOKENS is required')
+  // authTokens can be empty — auth flow will provide a token at startup
   if (cfg.rotationInterval <= 0) throw new Error('ROTATION_INTERVAL must be greater than zero')
   if (cfg.requestTimeout <= 0) throw new Error('REQUEST_TIMEOUT must be greater than zero')
 
