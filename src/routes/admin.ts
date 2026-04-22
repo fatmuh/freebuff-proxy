@@ -3,7 +3,7 @@ import type { BindingStore } from '../binding-store.js'
 import type { RunManager } from '../run-manager.js'
 
 // ─── POST /admin/bind ──────────────────────────────────────────
-export function handleBind(bindings: BindingStore) {
+export function handleBind(bindings: BindingStore, runs: RunManager) {
   return async (c: Context) => {
     const body = await c.req.json<{ api_key?: string; model?: string }>().catch(() => null)
     if (!body?.api_key || !body?.model) {
@@ -11,6 +11,9 @@ export function handleBind(bindings: BindingStore) {
     }
 
     const created = bindings.bind(body.api_key, body.model)
+    await runs.switchModel(body.model).catch(err => {
+      console.error('[admin/bind] switchModel failed:', err)
+    })
     return c.json({ ok: true, created })
   }
 }
@@ -29,9 +32,13 @@ export function handleUnbind(bindings: BindingStore) {
 }
 
 // ─── GET /admin/status ─────────────────────────────────────────
-export function handleStatus(bindings: BindingStore, runs: RunManager) {
+// Everything in one place: health, bindings, pools
+export function handleStatus(bindings: BindingStore, runs: RunManager, startedAt: Date) {
   return (c: Context) => {
     return c.json({
+      ok: true,
+      started_at: startedAt.toISOString(),
+      uptime_sec: Math.floor((Date.now() - startedAt.getTime()) / 1000),
       bindings: bindings.list(),
       pools: runs.snapshots(),
     })

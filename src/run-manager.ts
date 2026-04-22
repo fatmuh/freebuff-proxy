@@ -33,7 +33,7 @@ export interface RunLease {
 export class TokenPool {
   readonly name: string
   readonly token: string
-  readonly sessionModel: string
+  sessionModel: string
   readonly upstreamClient: UpstreamClient
 
   private config: Config
@@ -465,7 +465,7 @@ export class TokenPool {
     return false
   }
 
-  private async endSessionNow(): Promise<void> {
+  async endSessionNow(): Promise<void> {
     const s = this.session
     this.session = null
     if (!s || s.status === 'disabled' || !s.instanceId) return
@@ -515,6 +515,7 @@ export class RunManager {
   private upstreamClient: UpstreamClient
   private log: (...args: unknown[]) => void
   private maintainTimer: ReturnType<typeof setInterval> | null = null
+  private agentIds: string[] = []
 
   constructor(config: Config, upstreamClient: UpstreamClient, log: (...args: unknown[]) => void) {
     this.config = config
@@ -529,7 +530,42 @@ export class RunManager {
     })
   }
 
+  // ─── Switch Pool Model ────────────────────────────────────────
+  // Ends the current session on the pool and switches to a new model.
+  // One auth token = one session on upstream, so we reuse the same pool.
+
+  async switchModel(newModel: string): Promise<void> {
+    const pool = this.pools[0]
+    if (!pool) throw new Error('no pool available')
+    if (pool.sessionModel === newModel) return
+
+    const oldModel = pool.sessionModel
+    this.log(`switching pool from ${oldModel} → ${newModel}`)
+
+    // End the old session on upstream
+    await pool.endSessionNow().catch(err => this.log(`end session failed: ${err}`))
+    pool.session = null
+
+    // Retarget the pool to the new model
+    pool.sessionModel = newModel
+
+    // Prewarm new session in background
+    this.log(`prewarming session for ${newModel}...`)
+    void pool.prewarmSession().then(async () => {
+      for (const agentId of this.agentIds) {
+        try {
+          await pool.acquire(agentId, 'prewarm')
+          const run = pool.getRun(agentId)
+          if (run) pool.release(run)
+        } catch (err) {
+          this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
+        }
+      }
+    })
+  }
+
   async start(agentIds: string[]): Promise<void> {
+    this.agentIds = agentIds
     const prewarmPromises = this.pools.map(async pool => {
       await pool.prewarmSession()
       for (const agentId of agentIds) {

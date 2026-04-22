@@ -71,6 +71,7 @@ const SESSION_INVALID_ERRORS = new Set([
   'waiting_room_queued',
   'session_superseded',
   'session_expired',
+  'session_model_mismatch',
 ])
 
 export function isSessionInvalid(statusCode: number, errorBody: string): boolean {
