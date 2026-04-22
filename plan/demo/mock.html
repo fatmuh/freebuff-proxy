@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="catppuccin">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Proxy Dashboard</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* Theme Variables */
+        :root[data-theme="white"] {
+            --bg-color: #f8f9fa;
+            --surface-color: #ffffff;
+            --border-color: #dee2e6;
+            --dot-color: #ced4da;
+            --text-main: #212529;
+            --text-muted: #868e96;
+            --primary: #339af0;
+            --accent-green: #40c057;
+            --accent-red: #fa5252;
+            --accent-mauve: #845ef7;
+            --hover-bg: #f1f3f5;
+        }
+
+        :root[data-theme="catppuccin"] {
+            /* Catppuccin Mocha Palette */
+            --bg-color: #1e1e2e;
+            --surface-color: #181825;
+            --border-color: #313244;
+            --dot-color: #313244;
+            --text-main: #cdd6f4;
+            --text-muted: #a6adc8;
+            --primary: #89b4fa;
+            --accent-green: #a6e3a1;
+            --accent-red: #f38ba8;
+            --accent-mauve: #cba6f7;
+            --hover-bg: #313244;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            /* Dotted Background */
+            background-image: radial-gradient(var(--dot-color) 1px, transparent 1px);
+            background-size: 24px 24px;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        h1, h2, h3 {
+            font-weight: 600;
+        }
+
+        /* Layout */
+        .sidebar {
+            width: 260px;
+            background-color: var(--surface-color);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Sidebar Elements */
+        .brand {
+            padding: 24px;
+            font-size: 1.25rem;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-indicator {
+            width: 12px;
+            height: 12px;
+            background-color: var(--accent-mauve);
+        }
+
+        .nav-links {
+            flex: 1;
+            padding: 24px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: var(--text-muted);
+            padding: 12px 24px;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: 0.2s;
+        }
+
+        .nav-links a:hover {
+            background-color: var(--hover-bg);
+            color: var(--text-main);
+        }
+
+        .nav-links a.active {
+            color: var(--primary);
+            border-left: 4px solid var(--primary);
+            background-color: var(--hover-bg);
+            padding-left: 20px;
+            font-weight: 500;
+        }
+
+        .theme-toggle-btn {
+            margin: 24px;
+            padding: 12px;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            font-weight: 500;
+            transition: 0.2s;
+        }
+
+        .theme-toggle-btn:hover {
+            background: var(--hover-bg);
+        }
+
+        /* Top Bar */
+        .top-bar {
+            height: 70px;
+            background-color: var(--surface-color);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 32px;
+            gap: 40px;
+        }
+
+        .status-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .status-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .status-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%; /* Only round thing in the UI for the "live" light */
+            margin-right: 6px;
+        }
+
+        .anim-pulse { animation: pulse 2s infinite; }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(166, 227, 161, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(166, 227, 161, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(166, 227, 161, 0); }
+        }
+
+        /* Colors for Text/Indicators */
+        .c-green { color: var(--accent-green); }
+        .bg-green { background-color: var(--accent-green); }
+        .c-blue { color: var(--primary); }
+        .c-red { color: var(--accent-red); }
+        .c-mauve { color: var(--accent-mauve); }
+
+        /* Dashboard Content */
+        .dashboard {
+            padding: 32px;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 24px;
+        }
+
+        /* Square Card Styling */
+        .card {
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card-title {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .col-3 { grid-column: span 3; }
+        .col-4 { grid-column: span 4; }
+        .col-8 { grid-column: span 8; }
+        .col-12 { grid-column: span 12; }
+
+        .metric-big {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 8px;
+        }
+
+        .metric-sub {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        /* Mock Chart */
+        .mock-chart {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            height: 150px;
+            margin-top: 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .bar {
+            flex: 1;
+            background-color: var(--primary);
+            transition: height 0.3s;
+        }
+        
+        .bar:hover {
+            background-color: var(--accent-mauve);
+        }
+
+        /* Table */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        .data-table th, .data-table td {
+            text-align: left;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .data-table th {
+            color: var(--text-muted);
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            background-color: var(--hover-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        @media (max-width: 1024px) {
+            .col-3, .col-4 { grid-column: span 6; }
+            .col-8 { grid-column: span 12; }
+        }
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            .sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border-color); }
+            .nav-links { flex-direction: row; padding: 0; overflow-x: auto; }
+            .top-bar { flex-wrap: wrap; height: auto; padding: 16px; }
+            .col-3, .col-4 { grid-column: span 12; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-indicator"></div>
+            LLM Proxy
+        </div>
+        <nav class="nav-links">
+            <a href="#" class="active">Performance <span>→</span></a>
+            <a href="#">Logs</a>
+            <a href="#">API Keys</a>
+            <a href="#">Accounts</a>
+            <a href="#">Routing Rules</a>
+        </nav>
+        <button class="theme-toggle-btn" id="themeToggle">Switch to White Theme</button>
+    </aside>
+
+    <!-- Main View -->
+    <main class="main-content">
+        <!-- Top Bar (Live Status) -->
+        <header class="top-bar">
+            <div class="status-item">
+                <span class="status-label">System Status</span>
+                <span class="status-value c-green">
+                    <span class="status-indicator bg-green anim-pulse"></span>LIVE
+                </span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Global Uptime</span>
+                <span class="status-value">99.99%</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Req / Sec</span>
+                <span class="status-value c-blue">342</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Errors (Last 1hr)</span>
+                <span class="status-value c-red">0</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Avg Proxy Latency</span>
+                <span class="status-value c-mauve">14ms</span>
+            </div>
+        </header>
+
+        <!-- Dashboard Content -->
+        <div class="dashboard">
+            
+            <!-- Cards -->
+            <div class="card col-3">
+                <div class="card-title">Token Throughput</div>
+                <div class="metric-big">4.2M</div>
+                <div class="metric-sub"><span class="c-green">↑ 12%</span> vs last hour</div>
+            </div>
+
+            <div class="card col-3">
+                <div class="card-title">Cache Hit Rate</div>
+                <div class="metric-big">38.4%</div>
+                <div class="metric-sub">Saved: 1.6M tokens</div>
+            </div>
+
+            <div class="card col-3">
+                <div class="card-title">Active Connections</div>
+                <div class="metric-big">1,024</div>
+                <div class="metric-sub">Across 4 nodes</div>
+            </div>
+
+            <div class="card col-3">
+                <div class="card-title">Cost Estimate (Today)</div>
+                <div class="metric-big">$142.50</div>
+                <div class="metric-sub">OpenAI + Anthropic</div>
+            </div>
+
+            <!-- Big Chart Placeholder -->
+            <div class="card col-8">
+                <div class="card-title">
+                    Requests Volume (Last 24h)
+                    <span class="badge">Live Data</span>
+                </div>
+                <div class="mock-chart" id="chart-container">
+                    <!-- Bars injected via JS for effect -->
+                </div>
+            </div>
+
+            <!-- Provider Status -->
+            <div class="card col-4">
+                <div class="card-title">Provider Latency</div>
+                <table class="data-table">
+                    <tr>
+                        <th>Provider</th>
+                        <th>Latency</th>
+                        <th>Status</th>
+                    </tr>
+                    <tr>
+                        <td>gpt-4-turbo</td>
+                        <td>420ms</td>
+                        <td class="c-green">OK</td>
+                    </tr>
+                    <tr>
+                        <td>claude-3-opus</td>
+                        <td>890ms</td>
+                        <td class="c-green">OK</td>
+                    </tr>
+                    <tr>
+                        <td>gemini-1.5-pro</td>
+                        <td>310ms</td>
+                        <td class="c-green">OK</td>
+                    </tr>
+                    <tr>
+                        <td>mistral-large</td>
+                        <td>---</td>
+                        <td class="c-red">DOWN</td>
+                    </tr>
+                </table>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Interactive Script -->
+    <script>
+        // Theme Toggler
+        const themeToggleBtn = document.getElementById('themeToggle');
+        const htmlEl = document.documentElement;
+
+        themeToggleBtn.addEventListener('click', () => {
+            const currentTheme = htmlEl.getAttribute('data-theme');
+            if (currentTheme === 'catppuccin') {
+                htmlEl.setAttribute('data-theme', 'white');
+                themeToggleBtn.textContent = 'Switch to Catppuccin';
+            } else {
+                htmlEl.setAttribute('data-theme', 'catppuccin');
+                themeToggleBtn.textContent = 'Switch to White Theme';
+            }
+        });
+
+        // Generate Mock Chart Bars
+        const chartContainer = document.getElementById('chart-container');
+        for(let i=0; i<30; i++) {
+            const bar = document.createElement('div');
+            bar.className = 'bar';
+            // Random height between 20% and 100%
+            const height = Math.floor(Math.random() * 80) + 20;
+            bar.style.height = `${height}%`;
+            
+            // Randomly update bars to make it feel "live"
+            setInterval(() => {
+                const newHeight = Math.floor(Math.random() * 80) + 20;
+                bar.style.height = `${newHeight}%`;
+            }, Math.random() * 3000 + 2000);
+
+            chartContainer.appendChild(bar);
+        }
+    </script>
+</body>
+</html>
+
