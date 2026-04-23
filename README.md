@@ -6,6 +6,7 @@ The proxy manages Codebuff sessions behind the scenes: queues, rotates, and re-a
 
 ## Features
 
+- **Zero config** — just start the server, manage everything from the dashboard
 - **OpenAI-compatible** — drop-in for any tool that speaks the OpenAI API
 - **Multi-model** — routes by the model you request (`minimax/minimax-m2.7`, `z-ai/glm-5.1`)
 - **Session pool** — pre-warms and rotates free Codebuff sessions automatically
@@ -16,52 +17,32 @@ The proxy manages Codebuff sessions behind the scenes: queues, rotates, and re-a
 
 ## Quick Start
 
-### 1. Install
-
 ```bash
 git clone <repo-url> && cd freebuff-proxy
 npm install
-```
-
-### 2. Build
-
-```bash
 npm run build            # backend (tsup)
 npm run build:dashboard  # frontend (vite)
+npm start
 ```
 
-### 3. Run
+That's it. On first run, the CLI walks you through a browser login to Codebuff and saves the token. Then open the dashboard at `http://localhost:9187/`. Dashboard is open by default — set `DASHBOARD_PASSWORD` env var to enable login protection.
+
+From the dashboard you can do **everything** — no config file editing needed:
+
+- **Add/remove accounts** — browser-based Codebuff login, sessions pre-warm automatically
+- **Switch model providers** — assign models to accounts per-pool
+- **Generate API keys** — random or custom, toggle protection ON/OFF
+- **View usage** — token charts, request logs, per-key stats
+
+### Dev mode (hot reload)
 
 ```bash
-npm start
-# or for dev (hot reload):
 npm run dev
 ```
 
-On first run with no `AUTH_TOKENS`, the CLI walks you through a browser login to Codebuff and saves the token to `config.json`.
+### Advanced: env vars
 
-### 4. Open the Dashboard
-
-Navigate to `http://localhost:9187/`. Default password is `freebuff` (set via `DASHBOARD_PASSWORD` env var).
-
-## Configuration
-
-### config.json (in project root)
-
-```json
-{
-  "LISTEN_ADDR": ":9187",               // host:port to bind
-  "UPSTREAM_BASE_URL": "https://www.codebuff.com",
-  "AUTH_TOKENS": ["your-token-here"],   // Codebuff auth cookies
-  "TOKEN_MODELS": ["minimax/minimax-m2.7", "z-ai/glm-5.1"],
-  "ROTATION_INTERVAL": "6h",            // how often to re-queue sessions
-  "REQUEST_TIMEOUT": "15m",             // per-request timeout
-  "API_KEYS": [],                       // proxy API keys for access control
-  "HTTP_PROXY": ""                      // optional HTTP proxy for upstream
-}
-```
-
-All keys can be overridden with env vars of the same name. Array values are comma-separated in env.
+All config keys can be overridden via env vars (arrays are comma-separated): `LISTEN_ADDR`, `ROTATION_INTERVAL`, `REQUEST_TIMEOUT`, `HTTP_PROXY`, `AUTH_TOKENS`, `TOKEN_MODELS`, `API_KEYS`. Defaults work out of the box — no config file needed.
 
 ### Available Models
 
@@ -207,27 +188,6 @@ curl http://localhost:9187/v1/chat/completions \
   -H "content-type: application/json" \
   -d '{"model":"minimax/minimax-m2.7","stream":true,"messages":[{"role":"user","content":"hello"}]}'
 ```
-
-## API Key Protection
-
-By default the proxy is open (no key required). From the dashboard **API Keys** page you can:
-
-- **Generate keys** — random or custom
-- **Toggle protection ON/OFF** — works even when keys exist
-- **Track per-key usage** — requests, tokens in/out
-
-When protection is **OFF**, anyone can hit `/v1/*` without a key. When **ON**, requests must include `Authorization: Bearer <your-key>` or `?key=<your-key>`.
-
-## Adding Accounts
-
-From the dashboard **Accounts** page:
-
-1. Click **Add Account** → opens a Codebuff login in your browser
-2. Complete login in browser
-3. Dashboard auto-detects completion and creates the account
-4. Session is pre-warmed immediately
-
-Or add auth tokens manually to `config.json` under `AUTH_TOKENS`.
 
 ## Project Structure
 
