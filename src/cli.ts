@@ -8,6 +8,14 @@ import { resolve, dirname } from 'node:path'
 
 // ─── CLI Entry Point ──────────────────────────────────────────
 
+// Safety net: catch unhandled errors from streams/sockets so they log instead of crashing
+process.on('uncaughtException', (err) => {
+  console.error('[cli] uncaught exception (non-fatal):', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[cli] unhandled rejection (non-fatal):', reason)
+})
+
 async function main() {
   const args = process.argv.slice(2)
   let configPath: string | undefined

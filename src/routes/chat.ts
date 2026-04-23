@@ -78,10 +78,24 @@ export function handleChatCompletions(
         lease.pool.currentSessionInstanceId(),
       )
 
-      const { statusCode, headers, body } = await lease.pool.upstreamClient.chatCompletions(
-        lease.pool.token,
-        upstreamBody,
-      )
+      let statusCode: number
+      let headers: Record<string, string | string[] | undefined>
+      let body: Dispatcher.ResponseData['body']
+      try {
+        const resp = await lease.pool.upstreamClient.chatCompletions(
+          lease.pool.token,
+          upstreamBody,
+        )
+        statusCode = resp.statusCode
+        headers = resp.headers as Record<string, string | string[] | undefined>
+        body = resp.body
+      } catch (err) {
+        // Network error (socket closed, timeout, etc) — retry once like session/run invalid
+        console.log(`[${lease.pool.name}] upstream network error: ${err}`)
+        runs.release(lease)
+        if (attempt === 0) continue
+        return openAIError(502, `upstream network error: ${err}`, 'server_error')
+      }
 
       if (statusCode >= 200 && statusCode < 300) {
         const responseHeaders = new Headers()
@@ -129,7 +143,13 @@ export function handleChatCompletions(
           return new Response(webStream, { status: statusCode, headers: responseHeaders })
         } else {
           // Non-stream: buffer body, parse usage, then forward
-          const bodyBuffer = await body.arrayBuffer()
+          let bodyBuffer: ArrayBuffer
+          try {
+            bodyBuffer = await body.arrayBuffer()
+          } catch (err) {
+            console.log(`[${lease.pool.name}] error reading non-stream body: ${err}`)
+            return openAIError(502, `upstream body read error: ${err}`, 'server_error')
+          }
           let tokensIn: number | null = null
           let tokensOut: number | null = null
           try {
@@ -304,6 +324,16 @@ function interceptStreamForUsage(body: unknown) {
 
   // body from undici is an async iterable
   const nodeStream = Readable.from(body as unknown as AsyncIterable<Uint8Array>)
+
+  // Prevent unhandled 'error' events (e.g. socket closed mid-stream) from crashing the process
+  nodeStream.on('error', (err) => {
+    console.log('[stream] upstream body error:', err)
+    transform.destroy(err)
+  })
+  transform.on('error', (err) => {
+    console.log('[stream] transform error:', err)
+  })
+
   nodeStream.pipe(transform)
 
   return {

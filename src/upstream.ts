@@ -13,7 +13,7 @@ export class UpstreamClient {
     this.baseURL = baseURL
     this.userAgent = userAgent
     // Agent with redirect interceptor composed in (undici v7 style)
-    this.dispatcher = new Agent({
+    const agent = new Agent({
       keepAliveTimeout: 60_000,
       keepAliveMaxTimeout: 600_000,
       connect: { timeout: Math.min(requestTimeout / 2, 15_000) },
@@ -23,6 +23,13 @@ export class UpstreamClient {
         Network: [interceptors.redirect({ maxRedirections: 5 })],
       } as unknown as undefined,
     })
+
+    // Prevent unhandled socket errors (e.g. "other side closed") from crashing
+    agent.on('connectionError', (err: Error) => {
+      console.log('[upstream] connection error (handled):', err.message)
+    })
+
+    this.dispatcher = agent
   }
 
   // ─── Run Management ──────────────────────────────────────────
