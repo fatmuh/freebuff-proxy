@@ -1,4 +1,4 @@
-import { createSignal, createResource, For, Show, onCleanup, createMemo, onMount } from 'solid-js'
+import { createSignal, createResource, For, Show, onCleanup, createMemo, createEffect } from 'solid-js'
 import { apiGet } from '../lib/api'
 import {
   Chart,
@@ -351,15 +351,9 @@ export default function UsagePage() {
     if (config) lineChartInstance = new Chart(lineCanvasRef, config)
   }
 
-  // Init charts when canvas refs are available
-  onMount(() => {
-    createBarChart()
-    createLineChart()
-  })
-
-  // Re-create charts when data or timeframe changes
-  // Using createEffect-style tracking via analytics() dependency
-  createMemo(() => {
+  // Create/recreate charts when data or filters change
+  // createEffect runs AFTER DOM updates, so canvas refs from <Show> are set
+  createEffect(() => {
     analytics() // track
     timeframe() // track
     apiKeyId()  // track
