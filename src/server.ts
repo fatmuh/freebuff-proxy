@@ -77,9 +77,9 @@ export function createHonoApp(
 
   app.get('/api/keys', handleKeysList(auth))
   app.post('/api/keys', handleKeysCreate(auth))
+  app.patch('/api/keys/toggle', handleKeysToggle(auth))
   app.delete('/api/keys/:key', handleKeysDelete(auth))
   app.patch('/api/keys/:key', handleKeysUpdate(auth))
-  app.patch('/api/keys/toggle', handleKeysToggle(auth))
 
   app.get('/api/usage/summary', handleUsageSummary(db))
   app.get('/api/usage/daily', handleUsageDaily(db))
@@ -112,6 +112,9 @@ export function createHonoApp(
   })
 
   app.use('/*', serveStatic({ root: './dist-dashboard/' }))
+
+  // SPA fallback: any unmatched route serves index.html so client-side routing works
+  app.get('*', serveStatic({ root: './dist-dashboard/', path: 'index.html' }))
 
   return app
 }
