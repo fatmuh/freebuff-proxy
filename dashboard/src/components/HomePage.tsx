@@ -183,10 +183,11 @@ export default function HomePage() {
           <div class="home-hourly-bars">
             <For each={hourlyBarData()!}>
               {(bar) => (
-                <div
-                  class="home-hourly-bar-wrap"
-                  title={`${String(bar.hour).padStart(2, '0')}:00 — ${bar.count} requests`}
-                >
+                <div class="home-hourly-bar-wrap">
+                  <div class="chart-tooltip">
+                    <span class="chart-tooltip-title">{String(bar.hour).padStart(2, '0')}:00</span>
+                    <span class="chart-tooltip-value">{bar.count} requests</span>
+                  </div>
                   <div
                     class="home-hourly-bar"
                     style={{

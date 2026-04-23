@@ -1,7 +1,71 @@
-import { createSignal, createResource, For, Show, onCleanup, createMemo } from 'solid-js'
+import { createSignal, createResource, For, Show, onCleanup, createMemo, onMount } from 'solid-js'
 import { apiGet } from '../lib/api'
-import { Line, Bar } from 'solid-chartjs'
-import Chart from 'chart.js/auto'
+import {
+  Chart,
+  BarController,
+  BarElement,
+  LineController,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Tooltip,
+  Legend,
+} from 'chart.js'
+
+Chart.register(BarController, BarElement, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend)
+
+// ── External HTML tooltip for Chart.js ──────────────────────
+// Uses document.body for proper viewport-relative positioning.
+let tooltipEl: HTMLDivElement | null = null
+
+const getOrCreateTooltipEl = (): HTMLDivElement => {
+  if (!tooltipEl) {
+    tooltipEl = document.createElement('div')
+    tooltipEl.id = 'chartjs-tooltip'
+    tooltipEl.innerHTML = '<table></table>'
+    document.body.appendChild(tooltipEl)
+  }
+  return tooltipEl
+}
+
+const externalTooltipHandler = (context: { chart: any; tooltip: any }) => {
+  const { chart, tooltip } = context
+  const el = getOrCreateTooltipEl()
+
+  if (tooltip.opacity === 0) {
+    el.style.opacity = '0'
+    return
+  }
+
+  if (tooltip.body) {
+    const titleLines = tooltip.title || []
+    const bodyLines = tooltip.body.map((b: any) => b.lines)
+
+    let innerHtml = '<thead>'
+    for (const title of titleLines) {
+      innerHtml += `<tr><th class="cjs-tt-title">${title}</th></tr>`
+    }
+    innerHtml += '</thead><tbody>'
+
+    bodyLines.forEach((body: string[], i: number) => {
+      // Get color directly from dataset (not from labelColors, which can be empty with pointRadius: 0)
+      const dataset = chart.data.datasets[tooltip.dataPoints[i].datasetIndex]
+      const color = dataset.pointBackgroundColor || dataset.borderColor || '#89b4fa'
+      const style = `background:${color};border-color:${color};border-width:0;width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px;flex-shrink:0`
+      innerHtml += `<tr><td class="cjs-tt-row"><span style="${style}"></span>${body}</td></tr>`
+    })
+    innerHtml += '</tbody>'
+    el.querySelector('table')!.innerHTML = innerHtml
+  }
+
+  const rect = chart.canvas.getBoundingClientRect()
+  el.style.opacity = '1'
+  el.style.position = 'absolute'
+  el.style.left = `${rect.left + window.pageXOffset + tooltip.caretX}px`
+  el.style.top = `${rect.top + window.pageYOffset + tooltip.caretY}px`
+  el.style.pointerEvents = 'none'
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -59,17 +123,15 @@ const TIMEFRAMES = [
   { value: '1d', label: '24h' },
 ]
 
-// ── Chart color palette (freebuff theme) ──────────────────────
-
 const CHART_COLORS = [
-  '#89b4fa', // primary blue
-  '#a6e3a1', // green
-  '#cba6f7', // mauve
-  '#f9e2af', // yellow
-  '#f38ba8', // red
-  '#94e2d5', // teal
-  '#fab387', // peach
-  '#b4befe', // lavender
+  '#89b4fa',
+  '#a6e3a1',
+  '#cba6f7',
+  '#f9e2af',
+  '#f38ba8',
+  '#94e2d5',
+  '#fab387',
+  '#b4befe',
 ]
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -100,7 +162,12 @@ export default function UsagePage() {
   const [timeframe, setTimeframe] = createSignal('1d')
   const [apiKeyId, setApiKeyId] = createSignal<string | null>(null)
 
-  // Fetch analytics data
+  // Chart refs (native, not through solid-chartjs)
+  let barCanvasRef: HTMLCanvasElement | undefined
+  let lineCanvasRef: HTMLCanvasElement | undefined
+  let barChartInstance: Chart | undefined
+  let lineChartInstance: Chart | undefined
+
   const [analytics] = createResource(() => {
     const tf = timeframe()
     const akid = apiKeyId()
@@ -109,34 +176,32 @@ export default function UsagePage() {
     return `/api/usage-analytics?${params}`
   }, (url: string) => apiGet<UsageAnalyticsResponse>(url))
 
-  // Fetch api keys for filter dropdown
   const [apiKeys] = createResource(() => apiGet<{ keys: ApiKeyInfo[] }>('/api/keys'))
 
-  // Auto-refresh every 30s
   const [tick, setTick] = createSignal(0)
   const interval = setInterval(() => setTick(t => t + 1), 30_000)
   onCleanup(() => clearInterval(interval))
 
-  // ── Bar chart data (stacked: input vs output per model) ──────
+  const data = () => analytics()
 
-  const barChartData = createMemo(() => {
+  // ── Build chart configs reactively ──────────────────────────
+
+  const barChartConfig = createMemo(() => {
     const buckets = analytics()?.usage_over_time
     if (!buckets || buckets.length === 0) return null
 
     const tf = timeframe()
-    // Collect all models across buckets
     const modelSet = new Set<string>()
     for (const b of buckets) for (const m of b.models) modelSet.add(m.model)
     const models = Array.from(modelSet).sort()
 
-    // Build Chart.js datasets — one dataset per model for input, one for output (stacked)
     const inputDatasets = models.map((model, i) => ({
       label: `${model} (in)`,
       data: buckets.map(b => {
         const m = b.models.find(x => x.model === model)
         return m ? m.inputTokens : 0
       }),
-      backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + '33', // ~20% opacity for input
+      backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + '33',
       borderColor: CHART_COLORS[i % CHART_COLORS.length],
       borderWidth: 1,
       stack: 'input',
@@ -148,100 +213,165 @@ export default function UsagePage() {
         const m = b.models.find(x => x.model === model)
         return m ? m.outputTokens : 0
       }),
-      backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + 'E6', // ~90% opacity for output
+      backgroundColor: CHART_COLORS[i % CHART_COLORS.length] + 'E6',
       borderColor: CHART_COLORS[i % CHART_COLORS.length],
       borderWidth: 1,
       stack: 'output',
     }))
 
     return {
-      labels: buckets.map(b => formatXLabel(b.t, tf)),
-      datasets: [...inputDatasets, ...outputDatasets],
+      type: 'bar' as const,
+      data: {
+        labels: buckets.map(b => formatXLabel(b.t, tf)),
+        datasets: [...inputDatasets, ...outputDatasets],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true, labels: { color: '#cdd6f4', font: { size: 10 } } },
+          tooltip: {
+            enabled: false,
+            position: 'nearest',
+            external: externalTooltipHandler,
+            callbacks: {
+              label: (ctx: any) => ` ${ctx.dataset.label}: ${formatCompactNumber(ctx.parsed.y)} tokens`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { color: '#a6adc8', font: { size: 10 }, maxRotation: 45 },
+            grid: { display: false },
+          },
+          y: {
+            stacked: true,
+            ticks: { color: '#a6adc8', font: { size: 10 }, callback: (v: number) => formatTokenTick(v) },
+            grid: { color: 'rgba(49,50,68,0.5)' },
+          },
+        },
+      },
     }
   })
 
-  // ── Line chart data (tokens + requests dual axis) ────────────
-
-  const lineChartData = createMemo(() => {
+  const lineChartConfig = createMemo(() => {
     const points = analytics()?.usage_lines
     if (!points || points.length === 0) return null
     const tf = timeframe()
     return {
-      labels: points.map(p => formatXLabel(p.t, tf)),
-      datasets: [
-        {
-          label: 'Tokens',
-          data: points.map(p => p.tokens),
-          borderColor: '#89b4fa',
-          backgroundColor: 'rgba(137,180,250,0.1)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          yAxisID: 'tokens',
+      type: 'line' as const,
+      data: {
+        labels: points.map(p => formatXLabel(p.t, tf)),
+        datasets: [
+          {
+            label: 'Tokens',
+            data: points.map(p => p.tokens),
+            borderColor: '#89b4fa',
+            pointBackgroundColor: '#89b4fa',
+            backgroundColor: 'rgba(137,180,250,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            yAxisID: 'tokens',
+          },
+          {
+            label: 'Requests',
+            data: points.map(p => p.request_count),
+            borderColor: '#a6e3a1',
+            pointBackgroundColor: '#a6e3a1',
+            backgroundColor: 'rgba(166,227,161,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            yAxisID: 'requests',
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: true, labels: { color: '#cdd6f4', font: { size: 10 } } },
+          tooltip: {
+            enabled: false,
+            position: 'nearest',
+            external: externalTooltipHandler,
+            callbacks: {
+              label: (ctx: any) => {
+                const label = ctx.dataset.label
+                const val = ctx.parsed.y
+                return label === 'Tokens'
+                  ? ` Tokens: ${formatCompactNumber(val)}`
+                  : ` Requests: ${val}`
+              },
+            },
+          },
         },
-        {
-          label: 'Requests',
-          data: points.map(p => p.request_count),
-          borderColor: '#a6e3a1',
-          backgroundColor: 'rgba(166,227,161,0.1)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          yAxisID: 'requests',
+        scales: {
+          x: {
+            ticks: { color: '#a6adc8', font: { size: 10 }, maxRotation: 45 },
+            grid: { display: false },
+          },
+          tokens: {
+            type: 'linear' as const,
+            position: 'left' as const,
+            ticks: { color: '#89b4fa', font: { size: 10 }, callback: (v: number) => formatTokenTick(v) },
+            grid: { color: 'rgba(49,50,68,0.5)' },
+          },
+          requests: {
+            type: 'linear' as const,
+            position: 'right' as const,
+            ticks: { color: '#a6e3a1', font: { size: 10 } },
+            grid: { display: false },
+          },
         },
-      ],
+      },
     }
   })
 
-  const barChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: true, labels: { color: '#cdd6f4', font: { size: 10 } } },
-      tooltip: { mode: 'index' as const, intersect: false },
-    },
-    scales: {
-      x: {
-        stacked: true,
-        ticks: { color: '#a6adc8', font: { size: 10 }, maxRotation: 45 },
-        grid: { display: false },
-      },
-      y: {
-        stacked: true,
-        ticks: { color: '#a6adc8', font: { size: 10 }, callback: (v: number) => formatTokenTick(v) },
-        grid: { color: 'rgba(49,50,68,0.5)' },
-      },
-    },
+  // ── Manage chart lifecycle imperatively (like opencode) ────
+  // This is the KEY difference from solid-chartjs: we control the
+  // Chart instance directly, so Chart.js internal plugin state
+  // (tooltip, legend, etc.) is properly initialized on each create.
+
+  const createBarChart = () => {
+    if (!barCanvasRef) return
+    if (barChartInstance) barChartInstance.destroy()
+    const config = barChartConfig()
+    if (config) barChartInstance = new Chart(barCanvasRef, config)
   }
 
-  const lineChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: true, labels: { color: '#cdd6f4', font: { size: 10 } } },
-      tooltip: { mode: 'index' as const, intersect: false },
-    },
-    scales: {
-      x: {
-        ticks: { color: '#a6adc8', font: { size: 10 }, maxRotation: 45 },
-        grid: { display: false },
-      },
-      tokens: {
-        type: 'linear' as const,
-        position: 'left' as const,
-        ticks: { color: '#89b4fa', font: { size: 10 }, callback: (v: number) => formatTokenTick(v) },
-        grid: { color: 'rgba(49,50,68,0.5)' },
-      },
-      requests: {
-        type: 'linear' as const,
-        position: 'right' as const,
-        ticks: { color: '#a6e3a1', font: { size: 10 } },
-        grid: { display: false },
-      },
-    },
+  const createLineChart = () => {
+    if (!lineCanvasRef) return
+    if (lineChartInstance) lineChartInstance.destroy()
+    const config = lineChartConfig()
+    if (config) lineChartInstance = new Chart(lineCanvasRef, config)
   }
 
-  const data = () => analytics()
+  // Init charts when canvas refs are available
+  onMount(() => {
+    createBarChart()
+    createLineChart()
+  })
+
+  // Re-create charts when data or timeframe changes
+  // Using createEffect-style tracking via analytics() dependency
+  createMemo(() => {
+    analytics() // track
+    timeframe() // track
+    apiKeyId()  // track
+    tick()      // track
+    createBarChart()
+    createLineChart()
+  })
+
+  onCleanup(() => {
+    barChartInstance?.destroy()
+    lineChartInstance?.destroy()
+  })
 
   return (
     <div class="page usage-page">
@@ -254,7 +384,6 @@ export default function UsagePage() {
           </p>
         </div>
         <div class="usage-filters">
-          {/* API Key dropdown */}
           <Show when={apiKeys()?.keys && apiKeys()!.keys.length > 0}>
             <select
               value={apiKeyId() ?? 'all'}
@@ -267,7 +396,6 @@ export default function UsagePage() {
               </For>
             </select>
           </Show>
-          {/* Timeframe buttons */}
           <div class="timeframe-pills">
             <For each={TIMEFRAMES}>
               {(tf) => (
@@ -286,7 +414,7 @@ export default function UsagePage() {
       <Show when={data()} fallback={<div class="text-muted" style={{ padding: '40px' }}>Loading usage analytics...</div>}>
         {/* ── Stat Cards ── */}
         <div class="usage-stats-grid">
-          <div class="usage-stat-card" title="Total number of requests logged in the selected time range">
+          <div class="usage-stat-card">
             <div class="usage-stat-icon" style={{ background: 'rgba(137,180,250,0.15)', color: 'var(--primary)' }}>⬡</div>
             <div>
               <div class="usage-stat-label">REQUESTS</div>
@@ -294,7 +422,7 @@ export default function UsagePage() {
               <div class="usage-stat-hint">In selected range</div>
             </div>
           </div>
-          <div class="usage-stat-card" title="Total prompt-side (input) tokens consumed across all requests">
+          <div class="usage-stat-card">
             <div class="usage-stat-icon" style={{ background: 'rgba(166,227,161,0.15)', color: 'var(--accent-green)' }}>↓</div>
             <div>
               <div class="usage-stat-label">INPUT TOKENS</div>
@@ -302,7 +430,7 @@ export default function UsagePage() {
               <div class="usage-stat-hint">Prompt-side</div>
             </div>
           </div>
-          <div class="usage-stat-card" title="Total completion-side (output) tokens generated across all requests">
+          <div class="usage-stat-card">
             <div class="usage-stat-icon" style={{ background: 'rgba(203,166,247,0.15)', color: 'var(--accent-mauve)' }}>↑</div>
             <div>
               <div class="usage-stat-label">OUTPUT TOKENS</div>
@@ -310,7 +438,7 @@ export default function UsagePage() {
               <div class="usage-stat-hint">Completion-side</div>
             </div>
           </div>
-          <div class="usage-stat-card" title="Combined total of input + output tokens">
+          <div class="usage-stat-card">
             <div class="usage-stat-icon" style={{ background: 'rgba(249,226,175,0.15)', color: '#f9e2af' }}>Σ</div>
             <div>
               <div class="usage-stat-label">TOTAL TOKENS</div>
@@ -333,13 +461,12 @@ export default function UsagePage() {
               <span class="badge">{data()!.timeframe.key}</span>
             </Show>
           </div>
-          <Show when={barChartData()} fallback={<div class="text-muted" style={{ padding: '40px', 'text-align': 'center' }}>No token usage data in this range</div>}>
+          <Show when={barChartConfig()} fallback={<div class="text-muted" style={{ padding: '40px', 'text-align': 'center' }}>No token usage data in this range</div>}>
             <div style={{ height: '320px' }}>
-              <Bar data={barChartData()!} options={barChartOptions} />
+              <canvas ref={barCanvasRef} />
             </div>
           </Show>
-          {/* Legend pills */}
-          <Show when={barChartData()}>
+          <Show when={barChartConfig()}>
             <div class="usage-legend-strip">
               <span class="legend-hint">Outlined = Input</span>
               <span class="legend-hint">Solid = Output</span>
@@ -370,9 +497,9 @@ export default function UsagePage() {
               </p>
             </div>
           </div>
-          <Show when={lineChartData()} fallback={<div class="text-muted" style={{ padding: '40px', 'text-align': 'center' }}>No usage trend data in this range</div>}>
+          <Show when={lineChartConfig()} fallback={<div class="text-muted" style={{ padding: '40px', 'text-align': 'center' }}>No usage trend data in this range</div>}>
             <div style={{ height: '280px' }}>
-              <Line data={lineChartData()!} options={lineChartOptions} />
+              <canvas ref={lineCanvasRef} />
             </div>
           </Show>
         </div>
