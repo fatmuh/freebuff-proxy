@@ -97,7 +97,7 @@ function formatTokenTick(v: number): string {
 // ── Component ─────────────────────────────────────────────────
 
 export default function UsagePage() {
-  const [timeframe, setTimeframe] = createSignal('30d')
+  const [timeframe, setTimeframe] = createSignal('1d')
   const [apiKeyId, setApiKeyId] = createSignal<string | null>(null)
 
   // Fetch analytics data
@@ -286,7 +286,7 @@ export default function UsagePage() {
       <Show when={data()} fallback={<div class="text-muted" style={{ padding: '40px' }}>Loading usage analytics...</div>}>
         {/* ── Stat Cards ── */}
         <div class="usage-stats-grid">
-          <div class="usage-stat-card">
+          <div class="usage-stat-card" title="Total number of requests logged in the selected time range">
             <div class="usage-stat-icon" style={{ background: 'rgba(137,180,250,0.15)', color: 'var(--primary)' }}>⬡</div>
             <div>
               <div class="usage-stat-label">REQUESTS</div>
@@ -294,7 +294,7 @@ export default function UsagePage() {
               <div class="usage-stat-hint">In selected range</div>
             </div>
           </div>
-          <div class="usage-stat-card">
+          <div class="usage-stat-card" title="Total prompt-side (input) tokens consumed across all requests">
             <div class="usage-stat-icon" style={{ background: 'rgba(166,227,161,0.15)', color: 'var(--accent-green)' }}>↓</div>
             <div>
               <div class="usage-stat-label">INPUT TOKENS</div>
@@ -302,7 +302,7 @@ export default function UsagePage() {
               <div class="usage-stat-hint">Prompt-side</div>
             </div>
           </div>
-          <div class="usage-stat-card">
+          <div class="usage-stat-card" title="Total completion-side (output) tokens generated across all requests">
             <div class="usage-stat-icon" style={{ background: 'rgba(203,166,247,0.15)', color: 'var(--accent-mauve)' }}>↑</div>
             <div>
               <div class="usage-stat-label">OUTPUT TOKENS</div>
@@ -310,7 +310,7 @@ export default function UsagePage() {
               <div class="usage-stat-hint">Completion-side</div>
             </div>
           </div>
-          <div class="usage-stat-card">
+          <div class="usage-stat-card" title="Combined total of input + output tokens">
             <div class="usage-stat-icon" style={{ background: 'rgba(249,226,175,0.15)', color: '#f9e2af' }}>Σ</div>
             <div>
               <div class="usage-stat-label">TOTAL TOKENS</div>

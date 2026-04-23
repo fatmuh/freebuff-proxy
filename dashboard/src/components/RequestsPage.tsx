@@ -1,7 +1,5 @@
-import { createSignal, createResource, For, Show, onCleanup } from 'solid-js'
+import { createSignal, For, Show, onCleanup } from 'solid-js'
 import { apiGet } from '../lib/api'
-import { Line, Bar, Pie } from 'solid-chartjs'
-import Chart from 'chart.js/auto'
 
 interface RequestLog {
   id: number
@@ -20,20 +18,6 @@ interface RequestLog {
   is_stream: number
 }
 
-interface DailyUsage {
-  date: string
-  requests: number
-  tokens_in: number
-  tokens_out: number
-}
-
-interface ModelUsage {
-  model: string
-  requests: number
-  tokens_in: number
-  tokens_out: number
-}
-
 export default function RequestsPage() {
   const [page, setPage] = createSignal(1)
   const [total, setTotal] = createSignal(0)
@@ -43,9 +27,6 @@ export default function RequestsPage() {
   const [fromDate, setFromDate] = createSignal('')
   const [toDate, setToDate] = createSignal('')
   const [autoRefresh, setAutoRefresh] = createSignal(true)
-
-  const [dailyUsage] = createResource(() => apiGet<DailyUsage[]>('/api/usage/daily'))
-  const [modelUsage] = createResource(() => apiGet<ModelUsage[]>('/api/usage/by-model'))
 
   const refresh = async () => {
     const params = new URLSearchParams()
@@ -86,84 +67,6 @@ export default function RequestsPage() {
 
   const totalPages = () => Math.ceil(total() / 50)
 
-  // Chart data derivations
-  const dailyChartData = () => {
-    const d = dailyUsage()
-    if (!d || d.length === 0) return null
-    const sorted = [...d].sort((a, b) => a.date.localeCompare(b.date))
-    return {
-      labels: sorted.map(s => s.date.slice(5)),
-      datasets: [{
-        label: 'Requests',
-        data: sorted.map(s => s.requests),
-        borderColor: '#89b4fa',
-        backgroundColor: 'rgba(137,180,250,0.1)',
-        fill: true,
-        tension: 0.3,
-      }]
-    }
-  }
-
-  const tokensChartData = () => {
-    const d = dailyUsage()
-    if (!d || d.length === 0) return null
-    const sorted = [...d].sort((a, b) => a.date.localeCompare(b.date))
-    return {
-      labels: sorted.map(s => s.date.slice(5)),
-      datasets: [
-        {
-          label: 'Tokens In',
-          data: sorted.map(s => s.tokens_in),
-          backgroundColor: '#89b4fa',
-        },
-        {
-          label: 'Tokens Out',
-          data: sorted.map(s => s.tokens_out),
-          backgroundColor: '#a6e3a1',
-        }
-      ]
-    }
-  }
-
-  const modelPieData = () => {
-    const d = modelUsage()
-    if (!d || d.length === 0) return null
-    const colors = ['#89b4fa', '#a6e3a1', '#cba6f7', '#f9e2af', '#f38ba8']
-    return {
-      labels: d.map(m => m.model),
-      datasets: [{
-        data: d.map(m => m.requests),
-        backgroundColor: d.map((_, i) => colors[i % colors.length]),
-      }]
-    }
-  }
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { display: true },
-      y: { display: true, beginAtZero: true },
-    },
-  }
-
-  const barOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: true, labels: { color: '#cdd6f4' } } },
-    scales: {
-      x: { display: true },
-      y: { display: true, beginAtZero: true },
-    },
-  }
-
-  const pieOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: true, position: 'bottom' as const, labels: { color: '#cdd6f4' } } },
-  }
-
   return (
     <div class="page">
       <div class="page-header">
@@ -176,35 +79,6 @@ export default function RequestsPage() {
           </label>
         </div>
       </div>
-
-      <Show when={dailyChartData() || tokensChartData() || modelPieData()}>
-        <div class="charts-grid">
-          <Show when={dailyChartData()}>
-            <div class="card chart-card">
-              <h2 class="card-title">REQUESTS / DAY</h2>
-              <div style={{ height: '200px' }}>
-                <Line data={dailyChartData()!} options={chartOptions} />
-              </div>
-            </div>
-          </Show>
-          <Show when={tokensChartData()}>
-            <div class="card chart-card">
-              <h2 class="card-title">TOKENS / DAY</h2>
-              <div style={{ height: '200px' }}>
-                <Bar data={tokensChartData()!} options={barOptions} />
-              </div>
-            </div>
-          </Show>
-          <Show when={modelPieData()}>
-            <div class="card chart-card">
-              <h2 class="card-title">BY MODEL</h2>
-              <div style={{ height: '200px' }}>
-                <Pie data={modelPieData()!} options={pieOptions} />
-              </div>
-            </div>
-          </Show>
-        </div>
-      </Show>
 
       <div class="card">
         <h2 class="card-title">FILTERS</h2>

@@ -698,6 +698,7 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
   align-items: flex-start;
   gap: 14px;
   animation: usage-stat-pop 0.4s ease-out backwards;
+  cursor: help;
 }
 
 .usage-stat-card:nth-child(1) { animation-delay: 0.05s; }
@@ -802,4 +803,145 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
 @media (max-width: 768px) {
   .usage-stats-grid { grid-template-columns: repeat(2, 1fr); }
   .usage-header { flex-direction: column; align-items: flex-start; }
+}
+
+/* ── Home Page Improvements ──────────────────────────── */
+
+.home-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.home-stat-card {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  padding: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  animation: usage-stat-pop 0.4s ease-out backwards;
+  cursor: help;
+}
+
+.home-stat-card:nth-child(1) { animation-delay: 0.05s; }
+.home-stat-card:nth-child(2) { animation-delay: 0.1s; }
+.home-stat-card:nth-child(3) { animation-delay: 0.15s; }
+.home-stat-card:nth-child(4) { animation-delay: 0.2s; }
+
+.home-stat-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.home-stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.home-stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-main);
+  line-height: 1.2;
+}
+
+/* ── Hourly activity bar chart ── */
+
+.home-hourly-card {
+  cursor: default;
+}
+
+.home-hourly-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.home-hourly-stats {
+  display: flex;
+  gap: 16px;
+}
+
+.home-hourly-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  cursor: help;
+}
+
+.home-hourly-stat-val {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.home-hourly-stat-lbl {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.home-hourly-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 80px;
+  padding-top: 4px;
+}
+
+.home-hourly-bar-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  cursor: help;
+}
+
+.home-hourly-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.3s ease, background 0.3s ease;
+}
+
+.home-hourly-bar-wrap:hover .home-hourly-bar {
+  filter: brightness(1.3);
+}
+
+.home-hourly-label {
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  height: 12px;
+}
+
+/* ── Model badge with token count ── */
+
+.model-tokens {
+  font-size: 0.7rem;
+  color: var(--accent-mauve);
+  margin-left: 4px;
+}
+
+@media (max-width: 768px) {
+  .home-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .home-hourly-header { flex-direction: column; }
 }
