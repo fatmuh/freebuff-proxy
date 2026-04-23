@@ -14,9 +14,9 @@ export interface Account {
 }
 
 export interface ApiKeyEntry {
+  id: string
   key: string
   name: string
-  bound_account_id: string
   created_at: string
 }
 
@@ -24,12 +24,16 @@ interface AuthData {
   accounts: Account[]
   api_keys: ApiKeyEntry[]
   next_id: number
+  next_key_id: number
+  keys_enabled: boolean
 }
 
 export class AuthStore {
   private accounts = new Map<string, Account>()
   private apiKeys = new Map<string, ApiKeyEntry>()
   private nextIdNum = 1
+  private nextKeyIdNum = 1
+  private _keysEnabled = true
   private filePath: string
   private log: (...args: unknown[]) => void
 
@@ -43,6 +47,8 @@ export class AuthStore {
       const raw = await readFile(this.filePath, 'utf-8')
       const data: AuthData = JSON.parse(raw)
       this.nextIdNum = data.next_id ?? 1
+      this.nextKeyIdNum = data.next_key_id ?? 1
+      this._keysEnabled = data.keys_enabled ?? true
       if (data.accounts && Array.isArray(data.accounts)) {
         for (const acct of data.accounts) {
           if (acct.id && acct.token) {
@@ -52,7 +58,13 @@ export class AuthStore {
       }
       if (data.api_keys && Array.isArray(data.api_keys)) {
         for (const k of data.api_keys) {
-          if (k.key) this.apiKeys.set(k.key, k)
+          if (k.key) {
+            // Migration: ensure existing keys have an id
+            if (!k.id) {
+              k.id = `key-${this.nextKeyIdNum++}`
+            }
+            this.apiKeys.set(k.key, k)
+          }
         }
       }
       this.log('auth store: loaded', this.accounts.size, 'accounts,', this.apiKeys.size, 'api keys')
@@ -122,16 +134,17 @@ export class AuthStore {
   }
 
   // API Key methods
-  addApiKey(key: string, name: string, boundAccountId: string): ApiKeyEntry {
+  addApiKey(key: string, name: string): ApiKeyEntry {
+    const id = `key-${this.nextKeyIdNum++}`
     const entry: ApiKeyEntry = {
+      id,
       key,
       name,
-      bound_account_id: boundAccountId,
       created_at: new Date().toISOString(),
     }
     this.apiKeys.set(key, entry)
     this.persist()
-    this.log('auth store: added api key', name)
+    this.log('auth store: added api key', name, 'id:', id)
     return entry
   }
 
@@ -164,15 +177,23 @@ export class AuthStore {
     return [...this.apiKeys.keys()]
   }
 
-  getBindingForApiKey(key: string): string | null {
-    const entry = this.apiKeys.get(key)
-    if (!entry) return null
-    const account = this.accounts.get(entry.bound_account_id)
-    return account?.session_model ?? null
-  }
-
   hasAnyApiKeys(): boolean {
     return this.apiKeys.size > 0
+  }
+
+  isKeysEnabled(): boolean {
+    return this._keysEnabled
+  }
+
+  setKeysEnabled(enabled: boolean): void {
+    this._keysEnabled = enabled
+    this.persist()
+    this.log('auth store: key protection', enabled ? 'enabled' : 'disabled')
+  }
+
+  getApiKeyId(apiKey: string): string | null {
+    const entry = this.apiKeys.get(apiKey)
+    return entry?.id ?? null
   }
 
   private async persist(): Promise<void> {
@@ -182,6 +203,8 @@ export class AuthStore {
         accounts: [...this.accounts.values()],
         api_keys: [...this.apiKeys.values()],
         next_id: this.nextIdNum,
+        next_key_id: this.nextKeyIdNum,
+        keys_enabled: this._keysEnabled,
       }
       await writeFile(this.filePath, JSON.stringify(data, null, 2))
     } catch (err) {

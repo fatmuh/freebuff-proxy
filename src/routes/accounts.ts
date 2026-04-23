@@ -1,10 +1,14 @@
 import type { Context } from 'hono'
 import type { RunManager } from '../run-manager.js'
 import type { AuthStore, Account } from '../auth-store.js'
+import type { Config } from '../types.js'
+import type { UpstreamClient } from '../upstream.js'
+import { TokenPool } from '../run-manager.js'
+import { startWebAuthFlow, getAuthFlowState, removeAuthFlow } from '../auth.js'
 import { maskToken } from '../utils.js'
 
 interface AddAccountBody {
-  token: string
+  token?: string
   name?: string
   email?: string
   user_id?: string
@@ -24,30 +28,83 @@ export function handleAccountsList(auth: AuthStore) {
   }
 }
 
-export function handleAccountsAdd(auth: AuthStore) {
+export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Config, client: UpstreamClient, log: (...args: unknown[]) => void) {
   return async (c: Context) => {
     let body: AddAccountBody
     try { body = await c.req.json<AddAccountBody>() } catch { return c.json({ error: 'invalid json' }, 400) }
 
-    if (!body.token) {
-      return c.json({ error: 'token is required' }, 400)
+    // If token provided → manual add (existing behavior)
+    if (body.token) {
+      const id = `acct-${auth.nextId()}`
+      const account: Account = {
+        id,
+        name: body.name ?? id,
+        email: body.email ?? '',
+        user_id: body.user_id ?? '',
+        token: body.token,
+        auth_token: body.auth_token ?? '',
+        session_model: body.session_model ?? 'minimax/minimax-m2.7',
+        added_at: new Date().toISOString(),
+        paused: false,
+      }
+
+      auth.addAccount(account)
+      const pool = new TokenPool(id, account.token, account.session_model, config, client, log)
+      runs.addPool(pool)
+      return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } }, 201)
     }
 
-    const id = `acct-${auth.nextId()}`
-    const account: Account = {
-      id,
-      name: body.name ?? id,
-      email: body.email ?? '',
-      user_id: body.user_id ?? '',
-      token: body.token,
-      auth_token: body.auth_token ?? '',
-      session_model: body.session_model ?? 'minimax/minimax-m2.7',
-      added_at: new Date().toISOString(),
-      paused: false,
+    // No token → trigger web auth flow
+    try {
+      const result = await startWebAuthFlow(log)
+      return c.json({ ok: true, loginUrl: result.loginUrl, flowId: result.flowId }, 202)
+    } catch (err) {
+      return c.json({ error: `auth flow failed: ${err}` }, 500)
+    }
+  }
+}
+
+export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: Config, client: UpstreamClient, log: (...args: unknown[]) => void) {
+  return async (c: Context) => {
+    const flowId = c.req.param('flowId')
+    if (!flowId) return c.json({ error: 'flowId is required' }, 400)
+
+    const state = getAuthFlowState(flowId)
+    if (!state) return c.json({ error: 'flow not found' }, 404)
+
+    if (state.status === 'authenticated' && state.authToken && state.user) {
+      // Auto-create account from completed auth flow
+      const id = `acct-${auth.nextId()}`
+      const account: Account = {
+        id,
+        name: state.user.name || id,
+        email: state.user.email,
+        user_id: state.user.id,
+        token: state.authToken,
+        auth_token: '',
+        session_model: 'minimax/minimax-m2.7', // default; user can switch later
+        added_at: new Date().toISOString(),
+        paused: false,
+      }
+
+      auth.addAccount(account)
+      const pool = new TokenPool(id, account.token, account.session_model, config, client, log)
+      runs.addPool(pool)
+      removeAuthFlow(flowId)
+
+      return c.json({
+        status: 'authenticated',
+        accountId: id,
+        account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) },
+      })
     }
 
-    auth.addAccount(account)
-    return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } }, 201)
+    if (state.status === 'failed') {
+      removeAuthFlow(flowId)
+      return c.json({ status: 'failed', error: state.error })
+    }
+
+    return c.json({ status: 'pending' })
   }
 }
 
@@ -75,7 +132,10 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager) {
         }
       } else {
         const pool = runs.getPoolByName(id)
-        if (pool) pool.setPaused(false)
+        if (pool) {
+          pool.setPaused(false)
+          void pool.prewarmSession()
+        }
       }
       return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } })
     }

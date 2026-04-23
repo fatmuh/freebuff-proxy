@@ -1,18 +1,18 @@
 import type { Context } from 'hono'
-import { Readable } from 'node:stream'
+import { Readable, Transform } from 'node:stream'
 import type { Dispatcher } from 'undici'
 import type { RunManager } from '../run-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
-import type { BindingStore } from '../binding-store.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { openAIError, isSessionInvalid, isRunInvalid, extractUpstreamError, generateClientSessionId } from '../utils.js'
+import { PRIMARY_MODELS, DEFAULT_PRIMARY_MODEL } from '../types.js'
 
 export function handleChatCompletions(
   registry: ModelRegistry,
   runs: RunManager,
-  bindings: BindingStore,
   db: DB,
+  getApiKeyId: (apiKey: string) => string | null,
 ) {
   return async (c: Context) => {
     if (c.req.method !== 'POST') {
@@ -37,7 +37,7 @@ export function handleChatCompletions(
     }
 
     const apiKey = c.get('apiKey') as string | undefined
-    const primaryModel = apiKey ? bindings.get(apiKey) : 'minimax/minimax-m2.7'
+    const primaryModel = PRIMARY_MODELS.has(requestedModel) ? requestedModel : DEFAULT_PRIMARY_MODEL
     const isStream = payload.stream === true
 
     const startTime = Date.now()
@@ -50,9 +50,11 @@ export function handleChatCompletions(
       } catch (err) {
         console.log(`[chat] acquire failed: attempt=${attempt} err=${err}`)
         const latency = Date.now() - startTime
+        const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
         db.insertRequestLog({
           created_at: new Date(startTime).toISOString(),
           api_key: apiKey ?? null,
+          api_key_id: apiKeyId,
           account_id: null,
           model: requestedModel,
           agent_id: agentId,
@@ -98,23 +100,64 @@ export function handleChatCompletions(
         const latency = Date.now() - startTime
         console.log(`[${lease.pool.name}] request completed in ${latency}ms (status: ${statusCode})`)
 
-        db.insertRequestLog({
-          created_at: new Date(startTime).toISOString(),
-          api_key: apiKey ?? null,
-          account_id: lease.pool.name,
-          model: requestedModel,
-          agent_id: agentId,
-          run_id: lease.run.id,
-          status_code: statusCode,
-          tokens_in: null,
-          tokens_out: null,
-          latency_ms: latency,
-          error: null,
-          is_stream: isStream ? 1 : 0,
-        })
+        const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
 
-        const webStream = Readable.toWeb(body) as ReadableStream<Uint8Array>
-        return new Response(webStream, { status: statusCode, headers: responseHeaders })
+        if (isStream) {
+          // Stream: intercept SSE chunks to extract usage from the chunk before [DONE]
+          const { transformedStream, tokensIn, tokensOut, donePromise } = interceptStreamForUsage(body)
+
+          // Insert log after stream ends (so we have token counts)
+          void donePromise.then(() => {
+            db.insertRequestLog({
+              created_at: new Date(startTime).toISOString(),
+              api_key: apiKey ?? null,
+              api_key_id: apiKeyId,
+              account_id: lease.pool.name,
+              model: requestedModel,
+              agent_id: agentId,
+              run_id: lease.run.id,
+              status_code: statusCode,
+              tokens_in: tokensIn(),
+              tokens_out: tokensOut(),
+              latency_ms: Date.now() - startTime,
+              error: null,
+              is_stream: 1,
+            })
+          })
+
+          const webStream = Readable.toWeb(transformedStream) as ReadableStream<Uint8Array>
+          return new Response(webStream, { status: statusCode, headers: responseHeaders })
+        } else {
+          // Non-stream: buffer body, parse usage, then forward
+          const bodyBuffer = await body.arrayBuffer()
+          let tokensIn: number | null = null
+          let tokensOut: number | null = null
+          try {
+            const json = JSON.parse(Buffer.from(bodyBuffer).toString())
+            if (json.usage) {
+              tokensIn = json.usage.prompt_tokens ?? null
+              tokensOut = json.usage.completion_tokens ?? null
+            }
+          } catch { /* not JSON or no usage field */ }
+
+          db.insertRequestLog({
+            created_at: new Date(startTime).toISOString(),
+            api_key: apiKey ?? null,
+            api_key_id: apiKeyId,
+            account_id: lease.pool.name,
+            model: requestedModel,
+            agent_id: agentId,
+            run_id: lease.run.id,
+            status_code: statusCode,
+            tokens_in: tokensIn,
+            tokens_out: tokensOut,
+            latency_ms: latency,
+            error: null,
+            is_stream: 0,
+          })
+
+          return new Response(bodyBuffer, { status: statusCode, headers: responseHeaders })
+        }
       }
 
       const errorBody = await body.text()
@@ -142,9 +185,11 @@ export function handleChatCompletions(
       runs.release(lease)
       console.log(`[${lease.pool.name}] upstream error: ${statusCode} ${errorBody.trim()}`)
 
+      const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
       db.insertRequestLog({
         created_at: new Date(startTime).toISOString(),
         api_key: apiKey ?? null,
+        api_key_id: apiKeyId,
         account_id: lease.pool.name,
         model: requestedModel,
         agent_id: agentId,
@@ -166,9 +211,11 @@ export function handleChatCompletions(
     }
 
     const latency = Date.now() - startTime
+    const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
     db.insertRequestLog({
       created_at: new Date(startTime).toISOString(),
       api_key: apiKey ?? null,
+      api_key_id: apiKeyId,
       account_id: null,
       model: requestedModel,
       agent_id: agentId,
@@ -207,4 +254,62 @@ function injectUpstreamMetadata(
   cloned.codebuff_metadata = metadata
 
   return JSON.stringify(cloned)
+}
+
+function interceptStreamForUsage(body: unknown) {
+  let tokensIn: number | null = null
+  let tokensOut: number | null = null
+  let buffer = ''
+  let resolveDone: () => void
+  const donePromise = new Promise<void>((resolve) => { resolveDone = resolve })
+
+  const transform = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const text = chunk.toString('utf-8')
+      buffer += text
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const data = line.slice(6).trim()
+        if (data === '[DONE]') continue
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed.usage) {
+            tokensIn = parsed.usage.prompt_tokens ?? tokensIn
+            tokensOut = parsed.usage.completion_tokens ?? tokensOut
+          }
+        } catch { /* not JSON, skip */ }
+      }
+      callback(null, chunk)
+    },
+    flush(callback) {
+      if (buffer.startsWith('data: ')) {
+        const data = buffer.slice(6).trim()
+        if (data !== '[DONE]') {
+          try {
+            const parsed = JSON.parse(data)
+            if (parsed.usage) {
+              tokensIn = parsed.usage.prompt_tokens ?? tokensIn
+              tokensOut = parsed.usage.completion_tokens ?? tokensOut
+            }
+          } catch { /* ignore */ }
+        }
+      }
+      resolveDone()
+      callback()
+    },
+  })
+
+  // body from undici is an async iterable
+  const nodeStream = Readable.from(body as unknown as AsyncIterable<Uint8Array>)
+  nodeStream.pipe(transform)
+
+  return {
+    transformedStream: transform,
+    tokensIn: () => tokensIn,
+    tokensOut: () => tokensOut,
+    donePromise,
+  }
 }

@@ -11,19 +11,15 @@ export function handleBindingsList(bindings: BindingStore, auth: AuthStore) {
   return (c: Context) => {
     const rawBindings = bindings.list()
     const keys = auth.listApiKeys()
-    const accounts = auth.listAccounts()
 
     const enriched = rawBindings.map(b => {
       const apiKeyEntry = keys.find(k => k.key === b.apiKey)
-      const accountId = apiKeyEntry?.bound_account_id
-      const account = accountId ? accounts.find(a => a.id === accountId) : null
       return {
         api_key: b.apiKey.slice(0, 6) + '...' + b.apiKey.slice(-4),
         full_key: b.apiKey,
         model: b.model,
         key_name: apiKeyEntry?.name ?? '',
-        email: account?.email ?? '',
-        account_name: account?.name ?? '',
+        key_id: apiKeyEntry?.id ?? '',
         created_at: b.createdAt,
       }
     })

@@ -1,14 +1,22 @@
-import { createSignal, Show } from 'solid-js'
+import { createSignal, Show, onCleanup } from 'solid-js'
 import { useNavigate, A } from '@solidjs/router'
 import { checkAuth, logout } from '../lib/auth'
+import { apiGet } from '../lib/api'
 
 const NAV_ITEMS = [
   { href: '/', label: 'Home' },
   { href: '/accounts', label: 'Accounts' },
-  { href: '/bindings', label: 'Bindings' },
   { href: '/keys', label: 'API Keys' },
   { href: '/requests', label: 'Requests' },
 ]
+
+interface StatusData {
+  running: boolean
+  uptime_sec: number
+  total_accounts: number
+  active_accounts: number
+  queued_accounts: number
+}
 
 export default function Layout(props: { children: any }) {
   const navigate = useNavigate()
@@ -16,6 +24,7 @@ export default function Layout(props: { children: any }) {
     (localStorage.getItem('freebuff-theme') as 'dark' | 'light') ?? 'dark'
   )
   const [isProtected, setIsProtected] = createSignal(false)
+  const [status, setStatus] = createSignal<StatusData | null>(null)
 
   checkAuth().then(r => setIsProtected(r.protected)).catch(() => {})
 
@@ -25,7 +34,6 @@ export default function Layout(props: { children: any }) {
     document.documentElement.setAttribute('data-theme', t)
   }
 
-  // apply on mount
   if (typeof document !== 'undefined') {
     document.documentElement.setAttribute('data-theme', theme())
   }
@@ -40,8 +48,50 @@ export default function Layout(props: { children: any }) {
     window.location.reload()
   }
 
+  // Poll status for topbar
+  const pollStatus = async () => {
+    try {
+      const data = await apiGet<StatusData>('/api/status')
+      setStatus(data)
+    } catch {}
+  }
+  pollStatus()
+  const statusInterval = setInterval(pollStatus, 3000)
+  onCleanup(() => clearInterval(statusInterval))
+
+  const formatUptime = (sec: number) => {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return `${h}h ${m}m ${s}s`
+  }
+
   return (
     <div class="app-container">
+      <header class="topbar">
+        <div class="topbar-item">
+          <span class="topbar-dot topbar-dot-green"></span>
+          <span>Proxy Running</span>
+        </div>
+        <Show when={status()}>
+          <div class="topbar-item">
+            <span class="topbar-label">UPTIME</span>
+            <span class="mono">{formatUptime(status()!.uptime_sec)}</span>
+          </div>
+          <div class="topbar-item">
+            <span class="topbar-label">ACCOUNTS</span>
+            <span class="mono">{status()!.total_accounts}</span>
+          </div>
+          <div class="topbar-item">
+            <span class="topbar-label">ACTIVE</span>
+            <span class="mono" style={{ color: 'var(--accent-green)' }}>{status()!.active_accounts}</span>
+          </div>
+          <div class="topbar-item">
+            <span class="topbar-label">QUEUED</span>
+            <span class="mono" style={{ color: '#f9e2af' }}>{status()!.queued_accounts}</span>
+          </div>
+        </Show>
+      </header>
       <nav class="sidebar">
         <div class="sidebar-brand">
           <span class="brand-icon">F</span>

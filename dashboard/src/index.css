@@ -42,7 +42,23 @@ body {
 
 .app-container {
   display: flex;
+  flex-wrap: wrap;
   min-height: 100vh;
+}
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  background: var(--surface-color);
+  border-bottom: 1px solid var(--border-color);
+  padding: 10px 24px;
+  height: 44px;
 }
 
 .sidebar {
@@ -53,7 +69,7 @@ body {
   display: flex;
   flex-direction: column;
   position: fixed;
-  top: 0;
+  top: 44px;
   left: 0;
   bottom: 0;
   z-index: 100;
@@ -138,8 +154,9 @@ body {
 
 .main-content {
   margin-left: 260px;
+  margin-top: 44px;
   flex: 1;
-  min-height: 100vh;
+  min-height: calc(100vh - 44px);
   padding: 24px;
 }
 
@@ -157,16 +174,6 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  background: var(--surface-color);
-  border: 1px solid var(--border-color);
-  padding: 12px 24px;
-  margin-bottom: 20px;
 }
 
 .topbar-item {
@@ -419,6 +426,12 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
 
 @media (max-width: 768px) {
   .app-container { flex-direction: column; }
+  .topbar {
+    height: 36px;
+    padding: 6px 12px;
+    gap: 12px;
+    font-size: 0.75rem;
+  }
   .sidebar {
     position: fixed;
     bottom: 0;
@@ -446,12 +459,143 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
   }
   .nav-item-active { border-left: none; border-bottom-color: var(--primary); }
   .sidebar-footer { display: none; }
-  .main-content { margin-left: 0; padding: 16px; padding-bottom: 70px; }
+  .main-content { margin-left: 0; margin-top: 36px; padding: 16px; padding-bottom: 70px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid, .filter-row { grid-template-columns: 1fr; }
-  .topbar { flex-wrap: wrap; gap: 12px; }
+  .topbar { flex-wrap: wrap; gap: 8px; }
 }
 
 @media (min-width: 769px) and (max-width: 1024px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.chart-card {
+  min-height: 260px;
+}
+
+.sparkline {
+  width: 100%;
+  height: 40px;
+}
+
+.model-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+}
+
+.model-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+.model-count {
+  font-size: 0.8rem;
+  color: var(--primary);
+}
+
+.auth-flow-status {
+  padding: 16px 0;
+}
+
+.auth-flow-status p {
+  margin-bottom: 8px;
+}
+
+.auth-flow-link {
+  display: inline-block;
+  padding: 8px 16px;
+  background: var(--primary);
+  color: var(--bg-color);
+  text-decoration: none;
+  word-break: break-all;
+  margin-bottom: 12px;
+}
+
+.auth-flow-link:hover {
+  opacity: 0.9;
+}
+
+.model-binding-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.model-binding-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 10px 14px;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+}
+
+.model-binding-model {
+  min-width: 180px;
+  font-size: 0.85rem;
+  padding-top: 2px;
+}
+
+.model-binding-accounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-binding-acct {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.error-banner {
+  border-color: var(--accent-red) !important;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.created-key-banner {
+  border-color: var(--accent-green) !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.created-key-banner .mono {
+  word-break: break-all;
+  user-select: all;
+}
+
+.confirm-dialog {
+  border-color: var(--accent-mauve) !important;
+}
+
+.confirm-dialog p {
+  margin-bottom: 12px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
 }

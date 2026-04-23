@@ -3,7 +3,6 @@ import { loadConfig } from './config.js'
 import { UpstreamClient } from './upstream.js'
 import { ModelRegistry } from './model-registry.js'
 import { RunManager, TokenPool } from './run-manager.js'
-import { BindingStore } from './binding-store.js'
 import { AuthStore } from './auth-store.js'
 import { DB } from './db.js'
 import { createHonoApp } from './server.js'
@@ -15,9 +14,6 @@ export interface FreebuffProxy {
   close: () => Promise<void>
   port: number
 }
-
-const LOG_RETENTION_DAYS = 7
-const PURGE_INTERVAL = 24 * 3600_000
 
 export async function createServer(configOverrides?: Partial<Config> & { configPath?: string }): Promise<FreebuffProxy> {
   const configPath = configOverrides?.configPath ?? autoDetectConfig()
@@ -64,20 +60,14 @@ export async function createServer(configOverrides?: Partial<Config> & { configP
     }
   }
 
-  await runs.start(registry.agentIds())
-
-  const bindings = new BindingStore('data', log)
-  await bindings.load()
-
+  // Start HTTP server immediately — don't wait for session prewarm
   const db = new DB('data', log)
 
-  const purgeInterval = setInterval(() => {
-    const deleted = db.purgeOldLogs(LOG_RETENTION_DAYS)
-    if (deleted > 0) log(`db: purged ${deleted} logs older than ${LOG_RETENTION_DAYS} days`)
+  const sessionCleanupInterval = setInterval(() => {
     db.cleanExpiredSessions()
-  }, PURGE_INTERVAL)
+  }, 6 * 3600_000)
 
-  const app = createHonoApp(cfg, registry, runs, bindings, auth, db)
+  const app = createHonoApp(cfg, registry, runs, auth, db, client)
 
   const port = parsePort(cfg.listenAddr)
   const server = serve({
@@ -87,11 +77,14 @@ export async function createServer(configOverrides?: Partial<Config> & { configP
 
   log(`listening on ${cfg.listenAddr}`)
 
+  // Prewarm sessions in background — server is already accepting requests
+  runs.start(registry.agentIds()).catch(err => log('prewarm error:', err))
+
   return {
     port,
     close: async () => {
       log('shutting down...')
-      clearInterval(purgeInterval)
+      clearInterval(sessionCleanupInterval)
       server.close()
       await runs.close()
       registry.stop()

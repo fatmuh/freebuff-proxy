@@ -27,11 +27,17 @@ export default function AccountsPanel() {
   const [accounts, setAccounts] = createSignal<Account[]>([])
   const [pools, setPools] = createSignal<Pool[]>([])
   const [showAdd, setShowAdd] = createSignal(false)
+  const [addMode, setAddMode] = createSignal<'manual' | 'web'>('web')
   const [token, setToken] = createSignal('')
   const [name, setName] = createSignal('')
   const [email, setEmail] = createSignal('')
   const [model, setModel] = createSignal('minimax/minimax-m2.7')
   const [loading, setLoading] = createSignal(false)
+  const [authFlowId, setAuthFlowId] = createSignal<string | null>(null)
+  const [authFlowUrl, setAuthFlowUrl] = createSignal<string | null>(null)
+  const [authFlowStatus, setAuthFlowStatus] = createSignal<string>('pending')
+  const [errorMsg, setErrorMsg] = createSignal<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = createSignal<string | null>(null)
 
   const refresh = async () => {
     try {
@@ -48,8 +54,29 @@ export default function AccountsPanel() {
   const interval = setInterval(refresh, 3000)
   onCleanup(() => clearInterval(interval))
 
-  const handleAdd = async () => {
+  // Poll auth flow status when active
+  let authFlowPoll: ReturnType<typeof setInterval> | null = null
+  const startAuthFlowPoll = (flowId: string) => {
+    if (authFlowPoll) clearInterval(authFlowPoll)
+    authFlowPoll = setInterval(async () => {
+      try {
+        const data = await apiGet<{ status: string; accountId?: string; error?: string }>(`/api/accounts/flows/${flowId}/status`)
+        setAuthFlowStatus(data.status)
+        if (data.status === 'authenticated' || data.status === 'failed') {
+          if (authFlowPoll) clearInterval(authFlowPoll)
+          setAuthFlowId(null)
+          setAuthFlowUrl(null)
+          setShowAdd(false)
+          refresh()
+        }
+      } catch {}
+    }, 3000)
+  }
+  onCleanup(() => { if (authFlowPoll) clearInterval(authFlowPoll) })
+
+  const handleAddManual = async () => {
     setLoading(true)
+    setErrorMsg(null)
     try {
       await apiPost('/api/accounts', {
         token: token(),
@@ -63,7 +90,26 @@ export default function AccountsPanel() {
       setEmail('')
       refresh()
     } catch (err) {
-      alert('Failed to add account: ' + err)
+      setErrorMsg('Failed to add account: ' + err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleAddWebAuth = async () => {
+    setLoading(true)
+    setErrorMsg(null)
+    try {
+      const data = await apiPost<{ ok: boolean; loginUrl: string; flowId: string }>('/api/accounts', {
+        name: name() || undefined,
+        session_model: model(),
+      })
+      setAuthFlowUrl(data.loginUrl)
+      setAuthFlowId(data.flowId)
+      setAuthFlowStatus('pending')
+      startAuthFlowPoll(data.flowId)
+    } catch (err) {
+      setErrorMsg('Failed to start auth flow: ' + err)
     } finally {
       setLoading(false)
     }
@@ -75,7 +121,13 @@ export default function AccountsPanel() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Remove this account?')) return
+    setConfirmDelete(id)
+  }
+
+  const confirmDeleteAccount = async () => {
+    const id = confirmDelete()
+    if (!id) return
+    setConfirmDelete(null)
     await apiDelete(`/api/accounts/${id}`)
     refresh()
   }
@@ -103,6 +155,17 @@ export default function AccountsPanel() {
     return <span class="badge badge-none">{pool.sessionStatus || 'None'}</span>
   }
 
+  // Group accounts by model for the model→account binding view
+  const accountsByModel = () => {
+    const map = new Map<string, Account[]>()
+    for (const acct of accounts()) {
+      const m = acct.session_model
+      if (!map.has(m)) map.set(m, [])
+      map.get(m)!.push(acct)
+    }
+    return [...map.entries()]
+  }
+
   return (
     <div class="page">
       <div class="page-header">
@@ -110,21 +173,65 @@ export default function AccountsPanel() {
         <button class="btn btn-primary" onClick={() => setShowAdd(!showAdd())}>+ Add Account</button>
       </div>
 
+      <Show when={errorMsg()}>
+        <div class="card error-banner">
+          <span class="error-text">{errorMsg()}</span>
+          <button class="btn btn-sm" onClick={() => setErrorMsg(null)}>Dismiss</button>
+        </div>
+      </Show>
+
+      <Show when={confirmDelete()}>
+        <div class="card confirm-dialog">
+          <p>Remove this account? This cannot be undone.</p>
+          <div class="confirm-actions">
+            <button class="btn btn-sm btn-danger" onClick={confirmDeleteAccount}>Remove</button>
+            <button class="btn btn-sm" onClick={() => setConfirmDelete(null)}>Cancel</button>
+          </div>
+        </div>
+      </Show>
+
       <Show when={showAdd()}>
         <div class="card">
           <h2 class="card-title">ADD ACCOUNT</h2>
-          <div class="form-grid">
-            <input placeholder="Auth Token" value={token()} onInput={(e) => setToken(e.currentTarget.value)} />
-            <input placeholder="Name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
-            <input placeholder="Email" value={email()} onInput={(e) => setEmail(e.currentTarget.value)} />
-            <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
-              <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
-              <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
-            </select>
-            <button class="btn btn-primary" onClick={handleAdd} disabled={loading() || !token()}>
-              {loading() ? 'Adding...' : 'Add'}
-            </button>
-          </div>
+          <Show when={!authFlowId()}>
+            <div class="form-grid" style={{ 'margin-bottom': '12px' }}>
+              <button class="btn btn-sm" classList={{ 'btn-primary': addMode() === 'web' }} onClick={() => setAddMode('web')}>Web Auth</button>
+              <button class="btn btn-sm" classList={{ 'btn-primary': addMode() === 'manual' }} onClick={() => setAddMode('manual')}>Manual Token</button>
+            </div>
+            <Show when={addMode() === 'web'}>
+              <div class="form-grid">
+                <input placeholder="Name (optional)" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+                <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
+                  <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
+                  <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
+                </select>
+                <button class="btn btn-primary" onClick={handleAddWebAuth} disabled={loading()}>
+                  {loading() ? 'Starting...' : 'Start Auth Flow'}
+                </button>
+              </div>
+            </Show>
+            <Show when={addMode() === 'manual'}>
+              <div class="form-grid">
+                <input placeholder="Auth Token" value={token()} onInput={(e) => setToken(e.currentTarget.value)} />
+                <input placeholder="Name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+                <input placeholder="Email" value={email()} onInput={(e) => setEmail(e.currentTarget.value)} />
+                <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
+                  <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
+                  <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
+                </select>
+                <button class="btn btn-primary" onClick={handleAddManual} disabled={loading() || !token()}>
+                  {loading() ? 'Adding...' : 'Add'}
+                </button>
+              </div>
+            </Show>
+          </Show>
+          <Show when={authFlowId()}>
+            <div class="auth-flow-status">
+              <p>Open this URL to authenticate:</p>
+              <a href={authFlowUrl()!} target="_blank" rel="noopener" class="auth-flow-link">{authFlowUrl()}</a>
+              <p class="text-muted">Waiting for authentication... (status: {authFlowStatus()})</p>
+            </div>
+          </Show>
         </div>
       </Show>
 
@@ -183,6 +290,34 @@ export default function AccountsPanel() {
                 </For>
               </tbody>
             </table>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={accountsByModel().length > 0}>
+        <div class="card">
+          <h2 class="card-title">MODEL BINDINGS</h2>
+          <div class="model-binding-grid">
+            <For each={accountsByModel()}>
+              {([model, accts]) => (
+                <div class="model-binding-row">
+                  <div class="model-binding-model mono">{model}</div>
+                  <div class="model-binding-accounts">
+                    <For each={accts}>
+                      {(acct) => {
+                        const pool = () => getPool(acct.id)
+                        return (
+                          <div class="model-binding-acct">
+                            <span>{acct.name}</span>
+                            {statusBadge(pool())}
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+              )}
+            </For>
           </div>
         </div>
       </Show>

@@ -6,6 +6,7 @@ export interface RequestLog {
   id?: number
   created_at: string
   api_key: string | null
+  api_key_id: string | null
   account_id: string | null
   model: string
   agent_id: string | null
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at  TEXT NOT NULL,
   api_key     TEXT,
+  api_key_id  TEXT,
   account_id  TEXT,
   model       TEXT NOT NULL,
   agent_id    TEXT,
@@ -54,6 +56,7 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_logs_created ON request_logs(created_at);',
   'CREATE INDEX IF NOT EXISTS idx_logs_model ON request_logs(model);',
   'CREATE INDEX IF NOT EXISTS idx_logs_api_key ON request_logs(api_key);',
+  'CREATE INDEX IF NOT EXISTS idx_logs_api_key_id ON request_logs(api_key_id);',
   'CREATE INDEX IF NOT EXISTS idx_logs_account ON request_logs(account_id);',
 ]
 
@@ -74,17 +77,32 @@ export class DB {
   private init(): void {
     this.db.exec(CREATE_REQUEST_LOGS)
     this.db.exec(CREATE_ADMIN_SESSIONS)
+    // Migration: add api_key_id column if missing (existing DBs)
+    try { this.db.exec('ALTER TABLE request_logs ADD COLUMN api_key_id TEXT') } catch { /* already exists */ }
     for (const sql of INDEXES) this.db.exec(sql)
     this.log('db: schema initialized')
   }
 
   insertRequestLog(log: Omit<RequestLog, 'id'>): number {
     const stmt = this.db.prepare(`
-      INSERT INTO request_logs (created_at, api_key, account_id, model, agent_id, run_id, status_code, tokens_in, tokens_out, latency_ms, error, is_stream)
-      VALUES (@created_at, @api_key, @account_id, @model, @agent_id, @run_id, @status_code, @tokens_in, @tokens_out, @latency_ms, @error, @is_stream)
+      INSERT INTO request_logs (created_at, api_key, api_key_id, account_id, model, agent_id, run_id, status_code, tokens_in, tokens_out, latency_ms, error, is_stream)
+      VALUES (@created_at, @api_key, @api_key_id, @account_id, @model, @agent_id, @run_id, @status_code, @tokens_in, @tokens_out, @latency_ms, @error, @is_stream)
     `)
     const info = stmt.run(log)
     return info.lastInsertRowid as number
+  }
+
+  lastInsertRowid(): number {
+    const row = this.db.prepare('SELECT last_insert_rowid() as id').get() as { id: number }
+    return row.id
+  }
+
+  updateRequestLogTokens(id: number, tokensIn: number | null, tokensOut: number | null): void {
+    this.db.prepare('UPDATE request_logs SET tokens_in = @tokens_in, tokens_out = @tokens_out WHERE id = @id').run({
+      id,
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+    })
   }
 
   queryRequests(filters: {
@@ -195,6 +213,32 @@ export class DB {
       GROUP BY account_id
       ORDER BY requests DESC
     `).all({ start: startDate })
+  }
+
+  getUsageByApiKey(days: number = 30) {
+    const startDate = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00'
+    return this.db.prepare(`
+      SELECT api_key_id,
+             COUNT(*) as requests,
+             COALESCE(SUM(tokens_in), 0) as tokens_in,
+             COALESCE(SUM(tokens_out), 0) as tokens_out
+      FROM request_logs
+      WHERE created_at >= @start
+      GROUP BY api_key_id
+      ORDER BY requests DESC
+    `).all({ start: startDate })
+  }
+
+  getUsageHourly() {
+    const today = new Date().toISOString().slice(0, 10) + 'T00:00:00'
+    return this.db.prepare(`
+      SELECT strftime('%H', created_at) as hour,
+             COUNT(*) as requests
+      FROM request_logs
+      WHERE created_at >= @today
+      GROUP BY strftime('%H', created_at)
+      ORDER BY hour
+    `).all({ today })
   }
 
   // Session management

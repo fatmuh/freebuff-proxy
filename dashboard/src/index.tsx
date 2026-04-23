@@ -4,7 +4,6 @@ import './index.css'
 import App from './App'
 import HomePage from './components/HomePage'
 import AccountsPanel from './components/AccountsPanel'
-import BindingsPanel from './components/BindingsPanel'
 import ApiKeysPanel from './components/ApiKeysPanel'
 import RequestsPage from './components/RequestsPage'
 
@@ -15,7 +14,6 @@ render(() => (
   <Router root={App}>
     <Route path="/" component={HomePage} />
     <Route path="/accounts" component={AccountsPanel} />
-    <Route path="/bindings" component={BindingsPanel} />
     <Route path="/keys" component={ApiKeysPanel} />
     <Route path="/requests" component={RequestsPage} />
   </Router>

@@ -27,3 +27,16 @@ export function handleUsageByAccount(db: DB) {
     return c.json(db.getUsageByAccount(days))
   }
 }
+
+export function handleUsageByApiKey(db: DB) {
+  return (c: Context) => {
+    const days = parseInt(c.req.query('days') ?? '30')
+    return c.json(db.getUsageByApiKey(days))
+  }
+}
+
+export function handleUsageHourly(db: DB) {
+  return (c: Context) => {
+    return c.json(db.getUsageHourly())
+  }
+}

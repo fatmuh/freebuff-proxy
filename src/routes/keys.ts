@@ -5,7 +5,6 @@ import { randomBytes } from 'node:crypto'
 interface CreateKeyBody {
   key?: string
   name?: string
-  bound_account_id?: string
 }
 
 interface UpdateKeyBody {
@@ -15,7 +14,7 @@ interface UpdateKeyBody {
 export function handleKeysList(auth: AuthStore) {
   return (c: Context) => {
     const keys = auth.listApiKeys()
-    return c.json({ keys, enabled: auth.hasAnyApiKeys() })
+    return c.json({ keys, enabled: auth.isKeysEnabled(), has_keys: auth.hasAnyApiKeys() })
   }
 }
 
@@ -25,11 +24,8 @@ export function handleKeysCreate(auth: AuthStore) {
     try { body = await c.req.json<CreateKeyBody>() } catch { /* use default */ }
 
     const newKey = body.key ?? `sk-${randomBytes(24).toString('hex')}`
-    const accounts = auth.listAccounts()
-    const boundAccountId = body.bound_account_id ?? (accounts.length > 0 ? accounts[0].id : '')
-
-    const entry = auth.addApiKey(newKey, body.name ?? 'Unnamed Key', boundAccountId)
-    return c.json({ ok: true, key: newKey, name: entry.name, bound_account_id: entry.bound_account_id }, 201)
+    const entry = auth.addApiKey(newKey, body.name ?? 'Unnamed Key')
+    return c.json({ ok: true, id: entry.id, key: newKey, name: entry.name }, 201)
   }
 }
 
@@ -60,6 +56,10 @@ export function handleKeysUpdate(auth: AuthStore) {
 
 export function handleKeysToggle(auth: AuthStore) {
   return async (c: Context) => {
-    return c.json({ ok: true, enabled: auth.hasAnyApiKeys() })
+    let body: { enabled?: boolean } = {}
+    try { body = await c.req.json<{ enabled?: boolean }>() } catch {}
+    const enabled = body.enabled ?? !auth.isKeysEnabled()
+    auth.setKeysEnabled(enabled)
+    return c.json({ ok: true, enabled: auth.isKeysEnabled() })
   }
 }

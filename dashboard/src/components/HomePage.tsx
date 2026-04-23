@@ -17,31 +17,41 @@ interface Pool {
   paused: boolean
 }
 
-interface StatusData {
-  running: boolean
-  uptime_sec: number
-  total_accounts: number
-  active_accounts: number
-  queued_accounts: number
-  queues: { name: string; position: number; depth: number; estimated_wait_ms: number }[]
+interface ModelUsage {
+  model: string
+  requests: number
+  tokens_in: number
+  tokens_out: number
+}
+
+interface HourlyUsage {
+  hour: string
+  requests: number
+}
+
+interface RecentRequest {
+  id: number
+  created_at: string
+  model: string
+  status_code: number
+  latency_ms: number | null
 }
 
 export default function HomePage() {
   const [usage] = createResource(() => apiGet<UsageSummary>('/api/usage/summary'))
   const [pools, setPools] = createSignal<Pool[]>([])
-  const [status, setStatus] = createSignal<StatusData | null>(null)
-  const [recentRequests, setRecentRequests] = createSignal<any[]>([])
+  const [modelBreakdown] = createResource(() => apiGet<ModelUsage[]>('/api/usage/by-model?days=1'))
+  const [hourlyData] = createResource(() => apiGet<HourlyUsage[]>('/api/usage/hourly'))
+  const [recentRequests, setRecentRequests] = createSignal<RecentRequest[]>([])
 
   const poll = async () => {
     try {
-      const [poolsData, reqsData, statusData] = await Promise.all([
+      const [poolsData, reqsData] = await Promise.all([
         apiGet<{ pools: Pool[] }>('/api/pools'),
-        apiGet<{ rows: any[] }>('/api/requests?limit=5'),
-        apiGet<StatusData>('/api/status'),
+        apiGet<{ rows: RecentRequest[] }>('/api/requests?limit=5'),
       ])
       setPools(poolsData.pools)
       setRecentRequests(reqsData.rows)
-      setStatus(statusData)
     } catch {}
   }
 
@@ -60,41 +70,30 @@ export default function HomePage() {
     return <span class="badge badge-none">{pool.sessionStatus || 'None'}</span>
   }
 
-  const formatUptime = (sec: number) => {
-    const h = Math.floor(sec / 3600)
-    const m = Math.floor((sec % 3600) / 60)
-    const s = sec % 60
-    return `${h}h ${m}m ${s}s`
+  const sparklinePoints = () => {
+    const h = hourlyData()
+    if (!h || h.length === 0) return ''
+    // Build 24 data points (hours 0-23), fill missing with 0
+    const byHour = new Map<number, number>()
+    for (const item of h) {
+      byHour.set(parseInt(item.hour, 10), item.requests)
+    }
+    const maxReq = Math.max(...byHour.values(), 1)
+    const points: string[] = []
+    const width = 240
+    const height = 40
+    for (let i = 0; i < 24; i++) {
+      const x = (i / 23) * width
+      const val = byHour.get(i) ?? 0
+      const y = height - (val / maxReq) * height
+      points.push(`${x},${y}`)
+    }
+    return points.join(' ')
   }
 
   return (
     <div class="page">
       <h1 class="page-title">Dashboard</h1>
-
-      <Show when={status()}>
-        <div class="topbar">
-          <div class="topbar-item">
-            <span class="topbar-dot topbar-dot-green"></span>
-            <span>Proxy Running</span>
-          </div>
-          <div class="topbar-item">
-            <span class="topbar-label">UPTIME</span>
-            <span class="mono">{formatUptime(status()!.uptime_sec)}</span>
-          </div>
-          <div class="topbar-item">
-            <span class="topbar-label">ACCOUNTS</span>
-            <span class="mono">{status()!.total_accounts}</span>
-          </div>
-          <div class="topbar-item">
-            <span class="topbar-label">ACTIVE</span>
-            <span class="mono" style={{ color: 'var(--accent-green)' }}>{status()!.active_accounts}</span>
-          </div>
-          <div class="topbar-item">
-            <span class="topbar-label">QUEUED</span>
-            <span class="mono" style={{ color: '#f9e2af' }}>{status()!.queued_accounts}</span>
-          </div>
-        </div>
-      </Show>
 
       <div class="stats-grid">
         <div class="stat-card">
@@ -114,6 +113,36 @@ export default function HomePage() {
           <div class="stat-value">{usage()?.today?.avg_latency_ms ? Math.round(usage()!.today.avg_latency_ms) + 'ms' : '-'}</div>
         </div>
       </div>
+
+      <Show when={modelBreakdown() && modelBreakdown()!.length > 0}>
+        <div class="card">
+          <h2 class="card-title">MODEL BREAKDOWN (TODAY)</h2>
+          <div class="model-breakdown">
+            <For each={modelBreakdown()}>
+              {(m) => (
+                <div class="model-badge">
+                  <span class="model-name">{m.model}</span>
+                  <span class="model-count mono">{m.requests} requests</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={sparklinePoints()}>
+        <div class="card">
+          <h2 class="card-title">REQUESTS / HOUR TODAY</h2>
+          <svg viewBox="0 0 240 40" class="sparkline" preserveAspectRatio="none">
+            <polyline
+              fill="none"
+              stroke="var(--primary, #89b4fa)"
+              stroke-width="1.5"
+              points={sparklinePoints()}
+            />
+          </svg>
+        </div>
+      </Show>
 
       <div class="card">
         <h2 class="card-title">ACCOUNT STATUS</h2>

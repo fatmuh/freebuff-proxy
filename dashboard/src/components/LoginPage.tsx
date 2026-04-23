@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js'
+import { createSignal, Show } from 'solid-js'
 import { login } from '../lib/auth'
 
 export default function LoginPage(props: { onLogin: () => void }) {

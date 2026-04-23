@@ -59,7 +59,7 @@ async function authPost(path: string, body: unknown): Promise<{ statusCode: numb
       'user-agent': AUTH_USER_AGENT,
     },
     body: JSON.stringify(body),
-  })
+  } as Record<string, unknown>)
   const text = await respBody.text()
   let data: unknown
   try { data = JSON.parse(text) } catch { data = text }
@@ -74,14 +74,14 @@ async function authGet(path: string): Promise<{ statusCode: number; data: unknow
       'accept': '*/*',
       'user-agent': AUTH_USER_AGENT,
     },
-  })
+  } as Record<string, unknown>)
   const text = await respBody.text()
   let data: unknown
   try { data = JSON.parse(text) } catch { data = text }
   return { statusCode, data }
 }
 
-// ─── Main Auth Flow ───────────────────────────────────────────
+// ─── Main Auth Flow (CLI — blocking) ──────────────────────────
 
 export async function authenticate(log: (...args: unknown[]) => void): Promise<string> {
   const fingerprintId = generateFingerprintId()
@@ -139,4 +139,96 @@ export async function authenticate(log: (...args: unknown[]) => void): Promise<s
   }
 
   throw new Error('auth: timed out waiting for login')
+}
+
+// ─── Web Auth Flow (non-blocking — returns loginUrl, polls in background) ──
+
+export interface WebAuthFlowResult {
+  flowId: string
+  loginUrl: string
+}
+
+export interface WebAuthFlowState {
+  flowId: string
+  loginUrl: string
+  status: 'pending' | 'authenticated' | 'failed'
+  authToken: string | null
+  user: { name: string; email: string; id: string } | null
+  error: string | null
+}
+
+const activeFlows = new Map<string, WebAuthFlowState>()
+
+export function startWebAuthFlow(log: (...args: unknown[]) => void): Promise<WebAuthFlowResult> {
+  const fingerprintId = generateFingerprintId()
+  const fingerprintHash = hashFingerprint(fingerprintId)
+  const flowId = `flow-${randomBytes(8).toString('hex')}`
+
+  return (async () => {
+    const codeResp = await authPost('/api/auth/cli/code', { fingerprintId })
+
+    if (codeResp.statusCode !== 200) {
+      throw new Error(`auth: failed to get login code (status ${codeResp.statusCode}): ${JSON.stringify(codeResp.data)}`)
+    }
+
+    const codeData = codeResp.data as AuthCodeResponse
+    const loginUrl = codeData.loginUrl
+    const expiresAt = codeData.expiresAt
+
+    if (!loginUrl) {
+      throw new Error(`auth: no loginUrl in response: ${JSON.stringify(codeData)}`)
+    }
+
+    const state: WebAuthFlowState = {
+      flowId,
+      loginUrl,
+      status: 'pending',
+      authToken: null,
+      user: null,
+      error: null,
+    }
+    activeFlows.set(flowId, state)
+
+    // Background poll
+    const pollInterval = 3_000
+    const expiresTime = expiresAt || Date.now() + 10 * 60 * 1000
+    const statusPath = `/api/auth/cli/status?fingerprintId=${encodeURIComponent(fingerprintId)}&fingerprintHash=${encodeURIComponent(fingerprintHash)}&expiresAt=${expiresAt}`
+
+    const poll = async () => {
+      while (Date.now() < expiresTime) {
+        await sleep(pollInterval)
+        if (state.status !== 'pending') return
+
+        try {
+          const statusResp = await authGet(statusPath)
+          if (statusResp.statusCode === 200) {
+            const statusData = statusResp.data as AuthStatusResponse
+            if (statusData.user?.authToken) {
+              state.status = 'authenticated'
+              state.authToken = statusData.user.authToken
+              state.user = { name: statusData.user.name, email: statusData.user.email, id: statusData.user.id }
+              log(`auth flow ${flowId}: ✅ authenticated as ${statusData.user.name}`)
+              return
+            }
+          }
+        } catch (err) {
+          log(`auth flow ${flowId}: poll error: ${err}`)
+        }
+      }
+      state.status = 'failed'
+      state.error = 'timed out waiting for login'
+    }
+
+    void poll()
+
+    return { flowId, loginUrl }
+  })()
+}
+
+export function getAuthFlowState(flowId: string): WebAuthFlowState | undefined {
+  return activeFlows.get(flowId)
+}
+
+export function removeAuthFlow(flowId: string): void {
+  activeFlows.delete(flowId)
 }
