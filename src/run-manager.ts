@@ -50,6 +50,7 @@ export class TokenPool {
   lastError = ''
   private _restoredState = false
   private _paused = false
+  _switching = false
 
   constructor(
     name: string,
@@ -144,6 +145,8 @@ export class TokenPool {
           instanceId: saved.instanceId,
           model: this.sessionModel,
           expiresAt,
+          admittedAt: state.admittedAt ?? null,
+          remainingMs: state.remainingMs ?? 0,
           position: 0, queueDepth: 0, estimatedWaitMs: 0,
         }
         this.lastError = ''
@@ -265,9 +268,12 @@ export class TokenPool {
       sessionModel: this.sessionModel,
       runs,
       drainingRuns: this.draining.length,
+      switching: this._switching,
       sessionStatus: this.session?.status ?? 'none',
       sessionInstanceId: this.session?.instanceId ?? '',
       sessionExpiresAt: this.session?.expiresAt?.toISOString() ?? null,
+      sessionAdmittedAt: this.session?.admittedAt ?? null,
+      sessionRemainingMs: this.session?.remainingMs ?? 0,
       sessionPosition: this.session?.position ?? 0,
       sessionQueueDepth: this.session?.queueDepth ?? 0,
       sessionEstWaitMs: this.session?.estimatedWaitMs ?? 0,
@@ -324,7 +330,8 @@ export class TokenPool {
       if (result.status === 'active' && result.instanceId) {
         this.session = {
           status: 'active', instanceId: result.instanceId, model,
-          expiresAt: result.expiresAt, position: 0, queueDepth: 0, estimatedWaitMs: 0,
+          expiresAt: result.expiresAt, admittedAt: result.admittedAt ?? null, remainingMs: result.remainingMs ?? 0,
+          position: 0, queueDepth: 0, estimatedWaitMs: 0,
         }
         this.lastError = ''
         this.watchSessionExpiry(result.instanceId, result.expiresAt)
@@ -334,7 +341,8 @@ export class TokenPool {
       if (result.status === 'queued' && result.instanceId) {
         this.session = {
           status: 'queued', instanceId: result.instanceId, model,
-          expiresAt: null, position: result.position,
+          expiresAt: null, admittedAt: null, remainingMs: 0,
+          position: result.position,
           queueDepth: result.queueDepth, estimatedWaitMs: result.estimatedWaitMs,
         }
         this.backgroundPollSession(model, result.instanceId)
@@ -353,6 +361,7 @@ export class TokenPool {
 
   private async refreshSession(model: string): Promise<{
     status: string; instanceId: string; expiresAt: Date | null
+    admittedAt: string | null; remainingMs: number
     position: number; queueDepth: number; estimatedWaitMs: number
   }> {
     let lockedRetries = 0
@@ -361,7 +370,7 @@ export class TokenPool {
     for (;;) {
       switch (state.status.trim()) {
         case 'disabled':
-          return { status: 'disabled', instanceId: '', expiresAt: null, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
+          return { status: 'disabled', instanceId: '', expiresAt: null, admittedAt: null, remainingMs: 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
 
         case 'model_locked': {
           lockedRetries++
@@ -379,7 +388,7 @@ export class TokenPool {
           const id = state.instanceId?.trim() ?? ''
           if (!id) throw new Error('session active but missing instanceId')
           const exp = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
-          return { status: 'active', instanceId: id, expiresAt: exp, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
+          return { status: 'active', instanceId: id, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
         }
 
         case 'queued': {
@@ -387,6 +396,7 @@ export class TokenPool {
           if (!id) throw new Error('session queued but missing instanceId')
           this.session = {
             status: 'queued', instanceId: id, model, expiresAt: null,
+            admittedAt: null, remainingMs: 0,
             position: state.position ?? 0, queueDepth: state.queueDepth ?? 0,
             estimatedWaitMs: state.estimatedWaitMs ?? 0,
           }
@@ -418,7 +428,7 @@ export class TokenPool {
           const state = await this.upstreamClient.getSession(this.token, instanceId)
           if (state.status.trim() === 'active') {
             const exp = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
-            this.session = { status: 'active', instanceId, model, expiresAt: exp, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
+            this.session = { status: 'active', instanceId, model, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
             this.lastError = ''
             this.log(`${this.name}: bg poll → active!`)
             this.watchSessionExpiry(instanceId, exp)
@@ -549,10 +559,12 @@ export class RunManager {
 
     await pool.endSessionNow().catch(err => this.log(`end session failed: ${err}`))
     pool.session = null
+    pool._switching = true
     pool.sessionModel = newModel
 
     this.log(`prewarming session for ${newModel}...`)
     void pool.prewarmSession().then(async () => {
+      pool._switching = false
       for (const agentId of this.agentIds) {
         try {
           await pool.acquire(agentId, 'prewarm')
@@ -562,7 +574,7 @@ export class RunManager {
           this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
         }
       }
-    })
+    }).catch(() => { pool._switching = false })
   }
 
   async start(agentIds: string[]): Promise<void> {

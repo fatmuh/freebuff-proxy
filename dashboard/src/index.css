@@ -599,3 +599,32 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
   display: flex;
   gap: 8px;
 }
+
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #cdd6f4;
+  background: #313244;
+  border: 1px solid #45475a;
+  animation: toast-in 0.3s ease, toast-out 0.3s ease 4.7s forwards;
+  pointer-events: auto;
+}
+
+.toast-success { border-left: 3px solid #a6e3a1; }
+.toast-info { border-left: 3px solid #89b4fa; }
+.toast-warn { border-left: 3px solid #f9e2af; }
+
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes toast-out { from { opacity: 1; } to { opacity: 0; } }

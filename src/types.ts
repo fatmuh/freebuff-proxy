@@ -10,6 +10,16 @@ export const PRIMARY_MODELS = new Set([
 
 export const DEFAULT_PRIMARY_MODEL = 'minimax/minimax-m2.7'
 
+// Short alias → full upstream model ID
+export const MODEL_ALIASES: Record<string, string> = {
+  'minimax-m2.7': 'minimax/minimax-m2.7',
+  'glm-5.1': 'z-ai/glm-5.1',
+}
+
+export function resolveModelId(model: string): string {
+  return MODEL_ALIASES[model] ?? model
+}
+
 // ─── Config ───────────────────────────────────────────────────
 
 export interface Config {
@@ -57,6 +67,8 @@ export interface CachedSession {
   instanceId: string
   model: string
   expiresAt: Date | null
+  admittedAt: string | null
+  remainingMs: number
   position: number
   queueDepth: number
   estimatedWaitMs: number
@@ -80,9 +92,12 @@ export interface TokenSnapshot {
   sessionModel: string
   runs: RunSnapshot[]
   drainingRuns: number
+  switching: boolean
   sessionStatus: string
   sessionInstanceId: string
   sessionExpiresAt: string | null
+  sessionAdmittedAt: string | null
+  sessionRemainingMs: number
   sessionPosition: number
   sessionQueueDepth: number
   sessionEstWaitMs: number

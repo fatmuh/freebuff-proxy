@@ -1,4 +1,5 @@
 import type { Config } from './types.js'
+import { resolveModelId } from './types.js'
 
 // ─── Duration Parsing ─────────────────────────────────────────
 // Parses human-readable duration strings like "6h", "15m", "30s"
@@ -93,7 +94,7 @@ export async function loadConfig(configPath?: string): Promise<Config> {
 
   // Pad tokenModels to match authTokens length (default to minimax)
   while (cfg.tokenModels.length < cfg.authTokens.length) {
-    cfg.tokenModels.push('minimax/minimax-m2.7')
+    cfg.tokenModels.push(resolveModelId('minimax-m2.7'))
   }
 
   return cfg

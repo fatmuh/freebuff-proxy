@@ -6,7 +6,7 @@ import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { openAIError, isSessionInvalid, isRunInvalid, extractUpstreamError, generateClientSessionId } from '../utils.js'
-import { PRIMARY_MODELS, DEFAULT_PRIMARY_MODEL } from '../types.js'
+import { PRIMARY_MODELS, DEFAULT_PRIMARY_MODEL, resolveModelId } from '../types.js'
 
 export function handleChatCompletions(
   registry: ModelRegistry,
@@ -26,7 +26,7 @@ export function handleChatCompletions(
       return openAIError(400, 'request body must be valid JSON', 'invalid_request_error')
     }
 
-    const requestedModel = String(payload.model ?? '').trim()
+    const requestedModel = resolveModelId(String(payload.model ?? '').trim())
     if (!requestedModel) {
       return openAIError(400, 'model is required', 'invalid_request_error')
     }

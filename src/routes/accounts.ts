@@ -2,6 +2,7 @@ import type { Context } from 'hono'
 import type { RunManager } from '../run-manager.js'
 import type { AuthStore, Account } from '../auth-store.js'
 import type { Config } from '../types.js'
+import { resolveModelId } from '../types.js'
 import type { UpstreamClient } from '../upstream.js'
 import { TokenPool } from '../run-manager.js'
 import { startWebAuthFlow, getAuthFlowState, removeAuthFlow } from '../auth.js'
@@ -43,7 +44,7 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Con
         user_id: body.user_id ?? '',
         token: body.token,
         auth_token: body.auth_token ?? '',
-        session_model: body.session_model ?? 'minimax/minimax-m2.7',
+        session_model: resolveModelId(body.session_model ?? 'minimax-m2.7'),
         added_at: new Date().toISOString(),
         paused: false,
       }
@@ -82,7 +83,7 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: 
         user_id: state.user.id,
         token: state.authToken,
         auth_token: '',
-        session_model: 'minimax/minimax-m2.7', // default; user can switch later
+        session_model: resolveModelId('minimax-m2.7'),
         added_at: new Date().toISOString(),
         paused: false,
       }
@@ -140,10 +141,10 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager) {
       return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } })
     }
 
-    if (body.session_model !== undefined && body.session_model !== account.session_model) {
-      account.session_model = body.session_model
+    if (body.session_model !== undefined && resolveModelId(body.session_model) !== account.session_model) {
+      account.session_model = resolveModelId(body.session_model)
       auth.updateAccount(account)
-      void runs.switchModel(id, body.session_model).catch(err => {
+      void runs.switchModel(id, account.session_model).catch(err => {
         console.error(`[accounts] switchModel failed:`, err)
       })
     }

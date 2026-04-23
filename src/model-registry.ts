@@ -1,5 +1,6 @@
 import { UpstreamClient } from './upstream.js'
 import type { ModelRegistryState } from './types.js'
+import { resolveModelId } from './types.js'
 
 // ─── Hardcoded Fallback ────────────────────────────────────────
 // Used when remote fetch fails on startup (same as Go version)
@@ -73,11 +74,13 @@ export class ModelRegistry {
   }
 
   hasModel(model: string): boolean {
-    return model in this.modelToAgent
+    const resolved = resolveModelId(model)
+    return resolved in this.modelToAgent
   }
 
   agentForModel(model: string): string | undefined {
-    return this.modelToAgent[model]
+    const resolved = resolveModelId(model)
+    return this.modelToAgent[resolved]
   }
 
   agentIds(): string[] {

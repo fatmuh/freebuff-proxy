@@ -1,4 +1,5 @@
 import type { Config } from './types.js'
+import { resolveModelId } from './types.js'
 import { loadConfig } from './config.js'
 import { UpstreamClient } from './upstream.js'
 import { ModelRegistry } from './model-registry.js'
@@ -54,7 +55,7 @@ export async function createServer(configOverrides?: Partial<Config> & { configP
   if (accountTokens.length === 0 && cfg.authTokens.length > 0) {
     for (let i = 0; i < cfg.authTokens.length; i++) {
       const token = cfg.authTokens[i]
-      const model = cfg.tokenModels[i] ?? 'minimax/minimax-m2.7'
+      const model = resolveModelId(cfg.tokenModels[i] ?? 'minimax-m2.7')
       const pool = new TokenPool(`token-${i + 1}`, token, model, cfg, client, log)
       runs.addPool(pool)
     }

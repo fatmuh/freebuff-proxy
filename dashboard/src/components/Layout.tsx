@@ -16,6 +16,7 @@ interface StatusData {
   total_accounts: number
   active_accounts: number
   queued_accounts: number
+  sessions: { name: string; status: string; instanceId: string; model: string; admittedAt: string | null; expiresAt: string | null; remainingMs: number }[]
 }
 
 export default function Layout(props: { children: any }) {
@@ -64,6 +65,17 @@ export default function Layout(props: { children: any }) {
     const m = Math.floor((sec % 3600) / 60)
     const s = sec % 60
     return `${h}h ${m}m ${s}s`
+  }
+
+  const formatRemaining = (ms: number) => {
+    const m = Math.floor(ms / 60000)
+    const s = Math.floor((ms % 60000) / 1000)
+    return `${m}m ${s}s`
+  }
+
+  const shortModel = (model: string) => {
+    const parts = model.split('/')
+    return parts[parts.length - 1]
   }
 
   return (

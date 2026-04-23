@@ -104,9 +104,19 @@ export function createHonoApp(
       queued_accounts: queued.length,
       queues: queued.map(q => ({
         name: q.name,
+        model: q.sessionModel,
         position: q.sessionPosition,
         depth: q.sessionQueueDepth,
         estimated_wait_ms: q.sessionEstWaitMs,
+      })),
+      sessions: active.map(a => ({
+        name: a.name,
+        status: a.sessionStatus,
+        instanceId: a.sessionInstanceId,
+        model: a.sessionModel,
+        admittedAt: a.sessionAdmittedAt,
+        expiresAt: a.sessionExpiresAt,
+        remainingMs: a.sessionExpiresAt ? Math.max(0, new Date(a.sessionExpiresAt).getTime() - Date.now()) : 0,
       })),
     })
   })

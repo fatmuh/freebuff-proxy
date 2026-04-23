@@ -8,7 +8,12 @@ interface UsageSummary {
 interface Pool {
   name: string
   sessionModel: string
+  switching: boolean
   sessionStatus: string
+  sessionInstanceId: string
+  sessionExpiresAt: string | null
+  sessionAdmittedAt: string | null
+  sessionRemainingMs: number
   sessionPosition: number
   sessionQueueDepth: number
   sessionEstWaitMs: number
@@ -59,11 +64,22 @@ export default function HomePage() {
   const interval = setInterval(poll, 3000)
   onCleanup(() => clearInterval(interval))
 
+  const formatDuration = (ms: number) => {
+    const h = Math.floor(ms / 3600000)
+    const m = Math.floor((ms % 3600000) / 60000)
+    const s = Math.floor((ms % 60000) / 1000)
+    return `${h}h ${m}m ${s}s`
+  }
+
   const statusBadge = (pool: Pool) => {
     if (pool.paused) return <span class="badge badge-paused">Paused</span>
-    if (pool.sessionStatus === 'active') return <span class="badge badge-active">Active</span>
+    if (pool.switching) return <span class="badge badge-queued">Switching...</span>
+    if (pool.sessionStatus === 'active') {
+      const remaining = pool.sessionExpiresAt ? Math.max(0, new Date(pool.sessionExpiresAt).getTime() - Date.now()) : 0
+      return <span class="badge badge-active">Active ({formatDuration(remaining)})</span>
+    }
     if (pool.sessionStatus === 'queued') {
-      const wait = pool.sessionEstWaitMs > 0 ? ` (~${Math.ceil(pool.sessionEstWaitMs / 1000)}s)` : ''
+      const wait = pool.sessionEstWaitMs > 0 ? ` (~${formatDuration(pool.sessionEstWaitMs)})` : ''
       return <span class="badge badge-queued">Queued #{pool.sessionPosition}/{pool.sessionQueueDepth}{wait}</span>
     }
     if (pool.cooldownUntil) return <span class="badge badge-cooldown">Cooldown</span>
@@ -158,7 +174,7 @@ export default function HomePage() {
                     <div class="queue-detail">
                       <span class="mono">Position: {pool.sessionPosition}/{pool.sessionQueueDepth}</span>
                       <Show when={pool.sessionEstWaitMs > 0}>
-                        <span class="mono"> ~{Math.ceil(pool.sessionEstWaitMs / 1000)}s wait</span>
+                        <span class="mono"> ~{formatDuration(pool.sessionEstWaitMs)} wait</span>
                       </Show>
                     </div>
                   </Show>

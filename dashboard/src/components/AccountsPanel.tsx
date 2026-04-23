@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, For, Show } from 'solid-js'
+import { createSignal, onCleanup, For, Show, createEffect } from 'solid-js'
 import { apiGet, apiPost, apiPatch, apiDelete } from '../lib/api'
 
 interface Account {
@@ -14,7 +14,12 @@ interface Account {
 interface Pool {
   name: string
   sessionModel: string
+  switching: boolean
   sessionStatus: string
+  sessionInstanceId: string
+  sessionExpiresAt: string | null
+  sessionAdmittedAt: string | null
+  sessionRemainingMs: number
   sessionPosition: number
   sessionQueueDepth: number
   sessionEstWaitMs: number
@@ -31,13 +36,21 @@ export default function AccountsPanel() {
   const [token, setToken] = createSignal('')
   const [name, setName] = createSignal('')
   const [email, setEmail] = createSignal('')
-  const [model, setModel] = createSignal('minimax/minimax-m2.7')
+  const [model, setModel] = createSignal('minimax-m2.7')
   const [loading, setLoading] = createSignal(false)
   const [authFlowId, setAuthFlowId] = createSignal<string | null>(null)
   const [authFlowUrl, setAuthFlowUrl] = createSignal<string | null>(null)
   const [authFlowStatus, setAuthFlowStatus] = createSignal<string>('pending')
   const [errorMsg, setErrorMsg] = createSignal<string | null>(null)
   const [confirmDelete, setConfirmDelete] = createSignal<string | null>(null)
+  const [toasts, setToasts] = createSignal<{ id: number; msg: string; type: string }[]>([])
+  let toastId = 0
+
+  const addToast = (msg: string, type = 'info') => {
+    const id = ++toastId
+    setToasts(prev => [...prev, { id, msg, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000)
+  }
 
   const refresh = async () => {
     try {
@@ -133,18 +146,45 @@ export default function AccountsPanel() {
   }
 
   const handleSwitchModel = async (id: string, newModel: string) => {
+    const shortModel = newModel.split('/').pop() ?? newModel
+    addToast(`Switching to ${shortModel}...`, 'info')
     await apiPatch(`/api/accounts/${id}`, { session_model: newModel })
     refresh()
   }
 
   const getPool = (id: string) => pools().find(p => p.name === id)
 
+  const prevStatus = new Map<string, string>()
+  createEffect(() => {
+    for (const p of pools()) {
+      const prev = prevStatus.get(p.name)
+      if (prev && prev !== p.sessionStatus) {
+        const short = p.sessionModel.split('/').pop() ?? p.sessionModel
+        if (p.sessionStatus === 'active') addToast(`${p.name}: ${short} is active`, 'success')
+        else if (p.sessionStatus === 'queued') addToast(`${p.name}: queued #${p.sessionPosition}/${p.sessionQueueDepth}`, 'info')
+        else if (p.sessionStatus === 'ended' || p.sessionStatus === 'superseded') addToast(`${p.name}: session ended`, 'warn')
+      }
+      prevStatus.set(p.name, p.sessionStatus)
+    }
+  })
+
+  const formatDuration = (ms: number) => {
+    const h = Math.floor(ms / 3600000)
+    const m = Math.floor((ms % 3600000) / 60000)
+    const s = Math.floor((ms % 60000) / 1000)
+    return `${h}h ${m}m ${s}s`
+  }
+
   const statusBadge = (pool: Pool | undefined) => {
     if (!pool) return <span class="badge badge-none">No Pool</span>
     if (pool.paused) return <span class="badge badge-paused">Paused</span>
-    if (pool.sessionStatus === 'active') return <span class="badge badge-active">Active</span>
+    if (pool.switching) return <span class="badge badge-queued">Switching...</span>
+    if (pool.sessionStatus === 'active') {
+      const remaining = pool.sessionExpiresAt ? Math.max(0, new Date(pool.sessionExpiresAt).getTime() - Date.now()) : 0
+      return <span class="badge badge-active">Active ({formatDuration(remaining)})</span>
+    }
     if (pool.sessionStatus === 'queued') {
-      const wait = pool.sessionEstWaitMs > 0 ? ` (~${Math.ceil(pool.sessionEstWaitMs / 1000)}s)` : ''
+      const wait = pool.sessionEstWaitMs > 0 ? ` (~${formatDuration(pool.sessionEstWaitMs)})` : ''
       return (
         <span class="badge badge-queued">
           Queued #{pool.sessionPosition}/{pool.sessionQueueDepth}{wait}
@@ -202,8 +242,8 @@ export default function AccountsPanel() {
               <div class="form-grid">
                 <input placeholder="Name (optional)" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
                 <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
-                  <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
-                  <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
+                  <option value="minimax-m2.7">minimax-m2.7</option>
+                  <option value="glm-5.1">glm-5.1</option>
                 </select>
                 <button class="btn btn-primary" onClick={handleAddWebAuth} disabled={loading()}>
                   {loading() ? 'Starting...' : 'Start Auth Flow'}
@@ -216,8 +256,8 @@ export default function AccountsPanel() {
                 <input placeholder="Name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
                 <input placeholder="Email" value={email()} onInput={(e) => setEmail(e.currentTarget.value)} />
                 <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
-                  <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
-                  <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
+                  <option value="minimax-m2.7">minimax-m2.7</option>
+                  <option value="glm-5.1">glm-5.1</option>
                 </select>
                 <button class="btn btn-primary" onClick={handleAddManual} disabled={loading() || !token()}>
                   {loading() ? 'Adding...' : 'Add'}
@@ -272,7 +312,7 @@ export default function AccountsPanel() {
                           <Show when={pool()?.sessionStatus === 'queued'}>
                             Position {pool()!.sessionPosition} of {pool()!.sessionQueueDepth}
                             <Show when={pool()!.sessionEstWaitMs > 0}>
-                              <br />~{Math.ceil(pool()!.sessionEstWaitMs / 1000)}s wait
+                              <br />~{formatDuration(pool()!.sessionEstWaitMs)} wait
                             </Show>
                           </Show>
                         </td>
@@ -321,6 +361,13 @@ export default function AccountsPanel() {
           </div>
         </div>
       </Show>
+      <div class="toast-container">
+        <For each={toasts()}>
+          {(t) => (
+            <div class={`toast toast-${t.type}`}>{t.msg}</div>
+          )}
+        </For>
+      </div>
     </div>
   )
 }

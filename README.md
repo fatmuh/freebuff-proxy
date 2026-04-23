@@ -65,16 +65,18 @@ All keys can be overridden with env vars of the same name. Array values are comm
 
 ### Available Models
 
-| Model ID | Type |
-|---|---|
-| `minimax/minimax-m2.7` | Primary (owns session) |
-| `z-ai/glm-5.1` | Primary (owns session) |
+Both short and full IDs are accepted:
+
+| Short ID | Full ID | Type |
+|---|---|---|
+| `minimax-m2.7` | `minimax/minimax-m2.7` | Primary |
+| `glm-5.1` | `z-ai/glm-5.1` | Primary |
 
 Other models (gemini variants, etc.) ride on whichever primary session is active — no extra config needed.
 
 ## AI Editor Configuration
 
-Point any OpenAI-compatible editor at the proxy. If key protection is **ON**, set `api_key` to one of your proxy keys. Available models: `minimax/minimax-m2.7`, `z-ai/glm-5.1`.
+Point any OpenAI-compatible editor at the proxy. If key protection is **ON**, set `api_key` to one of your proxy keys. Both short and full model IDs work (`minimax-m2.7` or `minimax/minimax-m2.7`).
 
 ### opencode
 
