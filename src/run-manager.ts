@@ -213,15 +213,16 @@ export class TokenPool {
       throw new Error(`token cooling down until ${this.cooldownUntil!.toISOString()}`)
     }
 
-    this.log(`${this.name}: ensureSession for model=${model}`)
+    const verbose = model !== 'prewarm'
+    if (verbose) this.log(`${this.name}: ensureSession for model=${model}`)
     const instanceId = await this.ensureSession()
-    this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
+    if (verbose) this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
 
     let run = this._runs.get(agentId)
     const needsRotate = !run || (Date.now() - run.startedAt.getTime() >= this.config.rotationInterval)
 
     if (needsRotate) {
-      this.log(`${this.name}: rotating run for agent=${agentId}`)
+      if (verbose) this.log(`${this.name}: rotating run for agent=${agentId}`)
       await this.rotateAgent(agentId)
       run = this._runs.get(agentId)!
     }
@@ -565,15 +566,18 @@ export class RunManager {
     this.log(`prewarming session for ${newModel}...`)
     void pool.prewarmSession().then(async () => {
       pool._switching = false
+      let warmed = 0
       for (const agentId of this.agentIds) {
         try {
           await pool.acquire(agentId, 'prewarm')
           const run = pool.getRun(agentId)
           if (run) pool.release(run)
+          warmed++
         } catch (err) {
           this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
         }
       }
+      this.log(`${pool.name}: prewarm done (${warmed}/${this.agentIds.length} runs)`)
     }).catch(() => { pool._switching = false })
   }
 
@@ -581,15 +585,18 @@ export class RunManager {
     this.agentIds = agentIds
     const prewarmPromises = this.pools.map(async pool => {
       await pool.prewarmSession()
+      let warmed = 0
       for (const agentId of agentIds) {
         try {
           await pool.acquire(agentId, 'prewarm')
           const run = pool.getRun(agentId)
           if (run) pool.release(run)
+          warmed++
         } catch (err) {
           this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
         }
       }
+      this.log(`${pool.name}: prewarm done (${warmed}/${agentIds.length} runs)`)
     })
     await Promise.allSettled(prewarmPromises)
 
