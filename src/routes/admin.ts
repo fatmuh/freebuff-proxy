@@ -2,27 +2,35 @@ import type { Context } from 'hono'
 import type { BindingStore } from '../binding-store.js'
 import type { RunManager } from '../run-manager.js'
 
-// ─── POST /admin/bind ──────────────────────────────────────────
-export function handleBind(bindings: BindingStore, runs: RunManager) {
+interface BindBody {
+  api_key: string
+  model: string
+}
+
+interface UnbindBody {
+  api_key: string
+}
+
+export function handleBind(bindings: BindingStore) {
   return async (c: Context) => {
-    const body = await c.req.json<{ api_key?: string; model?: string }>().catch(() => null)
-    if (!body?.api_key || !body?.model) {
+    let body: BindBody
+    try { body = await c.req.json<BindBody>() } catch { return c.json({ error: 'invalid json' }, 400) }
+
+    if (!body.api_key || !body.model) {
       return c.json({ error: 'api_key and model are required' }, 400)
     }
 
     const created = bindings.bind(body.api_key, body.model)
-    await runs.switchModel(body.model).catch(err => {
-      console.error('[admin/bind] switchModel failed:', err)
-    })
     return c.json({ ok: true, created })
   }
 }
 
-// ─── POST /admin/unbind ────────────────────────────────────────
 export function handleUnbind(bindings: BindingStore) {
   return async (c: Context) => {
-    const body = await c.req.json<{ api_key?: string }>().catch(() => null)
-    if (!body?.api_key) {
+    let body: UnbindBody
+    try { body = await c.req.json<UnbindBody>() } catch { return c.json({ error: 'invalid json' }, 400) }
+
+    if (!body.api_key) {
       return c.json({ error: 'api_key is required' }, 400)
     }
 
@@ -31,8 +39,6 @@ export function handleUnbind(bindings: BindingStore) {
   }
 }
 
-// ─── GET /admin/status ─────────────────────────────────────────
-// Everything in one place: health, bindings, pools
 export function handleStatus(bindings: BindingStore, runs: RunManager, startedAt: Date) {
   return (c: Context) => {
     return c.json({

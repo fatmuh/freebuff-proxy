@@ -40,7 +40,7 @@ export class TokenPool {
   private log: (...args: unknown[]) => void
   private _runs = new Map<string, ManagedRun>()
   private draining: ManagedRun[] = []
-  private stateFile: string  // path to persist session state
+  private stateFile: string
 
   session: CachedSession | null = null
   private sessionRefreshPromise: Promise<string | null> | null = null
@@ -48,7 +48,8 @@ export class TokenPool {
 
   cooldownUntil: Date | null = null
   lastError = ''
-  private _restoredState = false  // have we tried restoring from disk?
+  private _restoredState = false
+  private _paused = false
 
   constructor(
     name: string,
@@ -109,6 +110,14 @@ export class TokenPool {
 
   isCoolingDown(): boolean {
     return this.cooldownUntil !== null && Date.now() < this.cooldownUntil.getTime()
+  }
+
+  isPaused(): boolean {
+    return this._paused
+  }
+
+  setPaused(paused: boolean): void {
+    this._paused = paused
   }
 
   // ─── Session Persistence ──────────────────────────────────────
@@ -264,6 +273,7 @@ export class TokenPool {
       sessionEstWaitMs: this.session?.estimatedWaitMs ?? 0,
       cooldownUntil: this.cooldownUntil?.toISOString() ?? null,
       lastError: this.lastError,
+      paused: this._paused,
     }
   }
 
@@ -516,40 +526,31 @@ export class RunManager {
   private log: (...args: unknown[]) => void
   private maintainTimer: ReturnType<typeof setInterval> | null = null
   private agentIds: string[] = []
+  private nextIdx = 0
 
   constructor(config: Config, upstreamClient: UpstreamClient, log: (...args: unknown[]) => void) {
     this.config = config
     this.upstreamClient = upstreamClient
     this.log = log
-    this.pools = config.authTokens.map((token, i) => {
-      const model = config.tokenModels[i] ?? 'minimax/minimax-m2.7'
-      return new TokenPool(
-        `token-${i + 1}`, token, model,
-        config, upstreamClient, log,
-      )
-    })
+    this.pools = []
   }
 
   // ─── Switch Pool Model ────────────────────────────────────────
   // Ends the current session on the pool and switches to a new model.
   // One auth token = one session on upstream, so we reuse the same pool.
 
-  async switchModel(newModel: string): Promise<void> {
-    const pool = this.pools[0]
+  async switchModel(poolName: string, newModel: string): Promise<void> {
+    const pool = this.getPoolByName(poolName) ?? this.pools[0]
     if (!pool) throw new Error('no pool available')
     if (pool.sessionModel === newModel) return
 
     const oldModel = pool.sessionModel
-    this.log(`switching pool from ${oldModel} → ${newModel}`)
+    this.log(`switching pool ${pool.name} from ${oldModel} → ${newModel}`)
 
-    // End the old session on upstream
     await pool.endSessionNow().catch(err => this.log(`end session failed: ${err}`))
     pool.session = null
-
-    // Retarget the pool to the new model
     pool.sessionModel = newModel
 
-    // Prewarm new session in background
     this.log(`prewarming session for ${newModel}...`)
     void pool.prewarmSession().then(async () => {
       for (const agentId of this.agentIds) {
@@ -595,19 +596,25 @@ export class RunManager {
 
   async acquire(primaryModel: string, agentId: string, model: string): Promise<RunLease> {
     if (!this.pools.length) throw new Error('no auth tokens configured')
-    const matching = this.pools.filter(p => p.sessionModel === primaryModel)
-    const candidates = matching.length > 0 ? matching : this.pools
-    const sorted = [...candidates].sort((a, b) => {
-      if (a.hasReadySession() !== b.hasReadySession()) return a.hasReadySession() ? -1 : 1
-      if (a.isCoolingDown() !== b.isCoolingDown()) return a.isCoolingDown() ? 1 : -1
-      return 0
-    })
+
+    const matching = this.pools.filter(p => p.sessionModel === primaryModel && !p.isPaused())
+
+    if (matching.length === 0) {
+      throw new Error(`no session available for model ${primaryModel}. Add/switch an account in the dashboard.`)
+    }
+
+    const startIdx = this.nextIdx % matching.length
+    this.nextIdx++
+
     const errors: string[] = []
-    for (const pool of sorted) {
+    for (let i = 0; i < matching.length; i++) {
+      const pool = matching[(startIdx + i) % matching.length]
+      if (pool.isCoolingDown()) continue
       try { return await pool.acquire(agentId, model) }
       catch (err) { errors.push(`${pool.name}: ${err}`) }
     }
-    throw new Error('unable to acquire run (' + errors.join('; ') + ')')
+
+    throw new Error(`all pools for ${primaryModel} are unavailable (${errors.join('; ')})`)
   }
 
   release(lease: RunLease | null): void {
@@ -628,6 +635,34 @@ export class RunManager {
 
   getPools(): TokenPool[] {
     return this.pools
+  }
+
+  addPool(pool: TokenPool): void {
+    this.pools.push(pool)
+    this.log(`run-manager: added pool ${pool.name} (model: ${pool.sessionModel})`)
+    void pool.prewarmSession().then(async () => {
+      for (const agentId of this.agentIds) {
+        try {
+          await pool.acquire(agentId, 'prewarm')
+          const run = pool.getRun(agentId)
+          if (run) pool.release(run)
+        } catch (err) {
+          this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
+        }
+      }
+    })
+  }
+
+  removePool(name: string): void {
+    const idx = this.pools.findIndex(p => p.name === name)
+    if (idx !== -1) {
+      this.pools.splice(idx, 1)
+      this.log(`run-manager: removed pool ${name}`)
+    }
+  }
+
+  getPoolByName(name: string): TokenPool | undefined {
+    return this.pools.find(p => p.name === name)
   }
 }
 

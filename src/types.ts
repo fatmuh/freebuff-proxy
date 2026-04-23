@@ -88,6 +88,7 @@ export interface TokenSnapshot {
   sessionEstWaitMs: number
   cooldownUntil: string | null
   lastError: string
+  paused: boolean
 }
 
 export interface RunSnapshot {
