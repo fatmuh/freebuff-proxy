@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: '/', label: 'Home' },
   { href: '/accounts', label: 'Accounts' },
   { href: '/keys', label: 'API Keys' },
+  { href: '/usage', label: 'Usage' },
   { href: '/requests', label: 'Requests' },
 ]
 

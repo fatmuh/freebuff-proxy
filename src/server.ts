@@ -8,7 +8,7 @@ import type { DB } from './db.js'
 import type { UpstreamClient } from './upstream.js'
 import { handleModels } from './routes/models.js'
 import { handleChatCompletions } from './routes/chat.js'
-import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly } from './routes/usage.js'
+import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly, handleUsageAnalytics } from './routes/usage.js'
 import { handleRequestsList, handleRequestsPurge } from './routes/requests.js'
 import { handleAuthCheck, handleAuthLogin, handleAuthLogout, dashboardAuthMiddleware } from './routes/auth.js'
 import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus } from './routes/accounts.js'
@@ -87,6 +87,8 @@ export function createHonoApp(
   app.get('/api/usage/by-account', handleUsageByAccount(db))
   app.get('/api/usage/by-key', handleUsageByApiKey(db))
   app.get('/api/usage/hourly', handleUsageHourly(db))
+
+  app.get('/api/usage-analytics', handleUsageAnalytics(db))
 
   app.get('/api/requests', handleRequestsList(db))
   app.delete('/api/requests', handleRequestsPurge(db))

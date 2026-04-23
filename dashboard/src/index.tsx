@@ -6,6 +6,7 @@ import HomePage from './components/HomePage'
 import AccountsPanel from './components/AccountsPanel'
 import ApiKeysPanel from './components/ApiKeysPanel'
 import RequestsPage from './components/RequestsPage'
+import UsagePage from './components/UsagePage'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('root element not found')
@@ -16,5 +17,6 @@ render(() => (
     <Route path="/accounts" component={AccountsPanel} />
     <Route path="/keys" component={ApiKeysPanel} />
     <Route path="/requests" component={RequestsPage} />
+    <Route path="/usage" component={UsagePage} />
   </Router>
 ), root)

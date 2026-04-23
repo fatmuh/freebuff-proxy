@@ -241,6 +241,224 @@ export class DB {
     `).all({ today })
   }
 
+  // ── Usage Analytics (codex-lb style) ──────────────────────────
+
+  /**
+   * Returns aggregated usage analytics for the dashboard Usage page.
+   * No cost/cached columns — just tokens & request counts.
+   * Uses SQLite epoch-based bucketing to group data by timeframe.
+   */
+  getUsageAnalytics(timeframe: string, apiKeyId?: string | null) {
+    const now = Date.now()
+    let startAt: Date | null
+    let bucketSeconds: number
+    const DAY = 86_400_000
+
+    // Resolve timeframe → start date + bucket size
+    switch (timeframe) {
+      case '1d':
+        startAt = new Date(now - DAY)
+        bucketSeconds = 3600 // 1h buckets
+        break
+      case '3d':
+        startAt = new Date(now - 3 * DAY)
+        bucketSeconds = 6 * 3600 // 6h buckets
+        break
+      case '7d':
+        startAt = new Date(now - 7 * DAY)
+        bucketSeconds = 24 * 3600 // 1d buckets
+        break
+      case '30d':
+        startAt = new Date(now - 30 * DAY)
+        bucketSeconds = 24 * 3600
+        break
+      default: { // "all" — find earliest record, auto-pick bucket
+        const earliest = this._getEarliestCreatedAt(apiKeyId)
+        startAt = earliest ? new Date(earliest + 'Z') : null
+        const spanSec = startAt ? (now - startAt.getTime()) / 1000 : 0
+        if (spanSec > 730 * 86400) bucketSeconds = 30 * 86400
+        else if (spanSec > 180 * 86400) bucketSeconds = 7 * 86400
+        else if (spanSec > 45 * 86400) bucketSeconds = 86400
+        else if (spanSec > 7 * 86400) bucketSeconds = 12 * 3600
+        else bucketSeconds = 3600
+        break
+      }
+    }
+
+    const startIso = startAt ? startAt.toISOString() : null
+    const endIso = new Date(now).toISOString()
+
+    // ── Totals ──
+    const totals = this._analyticsTotals(startIso, apiKeyId)
+
+    // ── Bar buckets (per model per time bucket) ──
+    const barBuckets = this._analyticsBarBuckets(startIso, endIso, bucketSeconds, apiKeyId)
+
+    // ── Line points (aggregate tokens per bucket) ──
+    const linePoints = this._analyticsLinePoints(startIso, endIso, bucketSeconds, apiKeyId)
+
+    // ── Model usage table ──
+    const modelUsage = this._analyticsModelUsage(startIso, apiKeyId)
+
+    return {
+      timeframe: {
+        key: timeframe,
+        bucket_seconds: bucketSeconds,
+        start_at: startIso,
+        end_at: endIso,
+      },
+      api_key_id: apiKeyId ?? null,
+      totals,
+      usage_over_time: barBuckets,
+      usage_lines: linePoints,
+      model_usage: modelUsage,
+    }
+  }
+
+  /** Get earliest created_at for "all" timeframe */
+  private _getEarliestCreatedAt(apiKeyId?: string | null): string | null {
+    const sql = apiKeyId
+      ? 'SELECT MIN(created_at) as v FROM request_logs WHERE api_key_id = ?'
+      : 'SELECT MIN(created_at) as v FROM request_logs'
+    const row = this.db.prepare(sql).get(apiKeyId ? [apiKeyId] : []) as { v: string | null }
+    return row?.v ?? null
+  }
+
+  /** Totals: request_count, input_tokens, output_tokens, total_tokens */
+  private _analyticsTotals(startIso: string | null, apiKeyId?: string | null) {
+    const conditions: string[] = []
+    const params: Record<string, unknown> = {}
+    if (startIso) { conditions.push('created_at >= @start'); params.start = startIso }
+    if (apiKeyId) { conditions.push('api_key_id = @akid'); params.akid = apiKeyId }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+
+    const sql = `SELECT COUNT(*) as request_count,
+                        COALESCE(SUM(tokens_in), 0) as input_tokens,
+                        COALESCE(SUM(tokens_out), 0) as output_tokens
+                 FROM request_logs ${where}`
+    const row = this.db.prepare(sql).get(params) as { request_count: number; input_tokens: number; output_tokens: number }
+    return {
+      request_count: row.request_count,
+      input_tokens: row.input_tokens,
+      output_tokens: row.output_tokens,
+      total_tokens: row.input_tokens + row.output_tokens,
+    }
+  }
+
+  /** Bar chart data: per model per time bucket */
+  private _analyticsBarBuckets(startIso: string | null, endIso: string, bucketSeconds: number, apiKeyId?: string | null) {
+    const conditions: string[] = []
+    const params: Record<string, unknown> = { end: endIso }
+    if (startIso) { conditions.push('created_at >= @start'); params.start = startIso }
+    if (apiKeyId) { conditions.push('api_key_id = @akid'); params.akid = apiKeyId }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+
+    // SQLite bucket: (unixepoch(created_at) / bucketSeconds) * bucketSeconds
+    const sql = `SELECT (unixepoch(created_at) / ${bucketSeconds}) * ${bucketSeconds} as bucket_epoch,
+                       model,
+                       COALESCE(SUM(tokens_in), 0) as input_tokens,
+                       COALESCE(SUM(tokens_out), 0) as output_tokens
+                FROM request_logs ${where}
+                GROUP BY bucket_epoch, model
+                ORDER BY bucket_epoch, model`
+    const rows = this.db.prepare(sql).all(params) as { bucket_epoch: number; model: string; input_tokens: number; output_tokens: number }[]
+
+    // Group by bucket → { t, models: [{ model, inputTokens, outputTokens }] }
+    const map = new Map<number, { model: string; inputTokens: number; outputTokens: number }[]>()
+    for (const r of rows) {
+      if (!map.has(r.bucket_epoch)) map.set(r.bucket_epoch, [])
+      map.get(r.bucket_epoch)!.push({
+        model: r.model,
+        inputTokens: r.input_tokens,
+        outputTokens: r.output_tokens,
+      })
+    }
+
+    // Fill gaps if we have a start
+    const result: { t: string; models: { model: string; inputTokens: number; outputTokens: number }[] }[] = []
+    if (startIso && map.size > 0) {
+      const startEpoch = Math.floor(new Date(startIso).getTime() / 1000)
+      const firstBucket = Math.ceil(startEpoch / bucketSeconds) * bucketSeconds
+      const endEpoch = Math.floor(new Date(endIso).getTime() / 1000)
+      for (let e = firstBucket; e <= endEpoch; e += bucketSeconds) {
+        result.push({
+          t: new Date(e * 1000).toISOString(),
+          models: map.get(e) ?? [],
+        })
+      }
+    } else {
+      for (const [epoch, models] of map) {
+        result.push({ t: new Date(epoch * 1000).toISOString(), models })
+      }
+    }
+    return result
+  }
+
+  /** Line chart data: total tokens + request count per bucket */
+  private _analyticsLinePoints(startIso: string | null, endIso: string, bucketSeconds: number, apiKeyId?: string | null) {
+    const conditions: string[] = []
+    const params: Record<string, unknown> = { end: endIso }
+    if (startIso) { conditions.push('created_at >= @start'); params.start = startIso }
+    if (apiKeyId) { conditions.push('api_key_id = @akid'); params.akid = apiKeyId }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+
+    const sql = `SELECT (unixepoch(created_at) / ${bucketSeconds}) * ${bucketSeconds} as bucket_epoch,
+                       COALESCE(SUM(tokens_in), 0) + COALESCE(SUM(tokens_out), 0) as tokens,
+                       COUNT(*) as request_count
+                FROM request_logs ${where}
+                GROUP BY bucket_epoch
+                ORDER BY bucket_epoch`
+    const rows = this.db.prepare(sql).all(params) as { bucket_epoch: number; tokens: number; request_count: number }[]
+
+    // Fill gaps
+    const map = new Map(rows.map(r => [r.bucket_epoch, r] as const))
+    const result: { t: string; tokens: number; request_count: number }[] = []
+
+    if (startIso && rows.length > 0) {
+      const startEpoch = Math.floor(new Date(startIso).getTime() / 1000)
+      const firstBucket = Math.ceil(startEpoch / bucketSeconds) * bucketSeconds
+      const endEpoch = Math.floor(new Date(endIso).getTime() / 1000)
+      for (let e = firstBucket; e <= endEpoch; e += bucketSeconds) {
+        const entry = map.get(e)
+        result.push({
+          t: new Date(e * 1000).toISOString(),
+          tokens: entry?.tokens ?? 0,
+          request_count: entry?.request_count ?? 0,
+        })
+      }
+    } else {
+      for (const r of rows) {
+        result.push({ t: new Date(r.bucket_epoch * 1000).toISOString(), tokens: r.tokens, request_count: r.request_count })
+      }
+    }
+    return result
+  }
+
+  /** Model usage table rows */
+  private _analyticsModelUsage(startIso: string | null, apiKeyId?: string | null) {
+    const conditions: string[] = []
+    const params: Record<string, unknown> = {}
+    if (startIso) { conditions.push('created_at >= @start'); params.start = startIso }
+    if (apiKeyId) { conditions.push('api_key_id = @akid'); params.akid = apiKeyId }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
+
+    const sql = `SELECT model,
+                       COUNT(*) as request_count,
+                       COALESCE(SUM(tokens_in), 0) as input_tokens,
+                       COALESCE(SUM(tokens_out), 0) as output_tokens
+                FROM request_logs ${where}
+                GROUP BY model
+                ORDER BY request_count DESC`
+    const rows = this.db.prepare(sql).all(params) as { model: string; request_count: number; input_tokens: number; output_tokens: number }[]
+    return rows.map(r => ({
+      model: r.model,
+      request_count: r.request_count,
+      input_tokens: r.input_tokens,
+      output_tokens: r.output_tokens,
+      total_tokens: r.input_tokens + r.output_tokens,
+    }))
+  }
+
   // Session management
   createSession(id: string, expiresAt: string): void {
     this.db.prepare('INSERT INTO admin_sessions (id, created_at, expires_at) VALUES (@id, @created_at, @expires_at)').run({

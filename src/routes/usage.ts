@@ -1,6 +1,17 @@
 import type { Context } from 'hono'
 import type { DB } from '../db.js'
 
+export function handleUsageAnalytics(db: DB) {
+  return (c: Context) => {
+    const timeframe = c.req.query('timeframe') ?? '30d'
+    const apiKeyId = c.req.query('apiKeyId') || null
+    // Validate timeframe
+    const valid = ['1d', '3d', '7d', '30d', 'all']
+    const tf = valid.includes(timeframe) ? timeframe : '30d'
+    return c.json(db.getUsageAnalytics(tf, apiKeyId))
+  }
+}
+
 export function handleUsageSummary(db: DB) {
   return (c: Context) => {
     return c.json(db.getUsageSummary())
