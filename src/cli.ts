@@ -23,23 +23,8 @@ async function main() {
     const auth = new AuthStore('data', log)
     await auth.load()
 
-    // If no accounts, run the CLI auth flow and save to auth.json
     if (auth.listAccountsFull().length === 0) {
-      log('no accounts configured, starting login flow...')
-      const token = await authenticate(log)
-
-      const id = `acct-${auth.nextId()}`
-      auth.addAccount({
-        id,
-        name: id,
-        email: '',
-        user_id: '',
-        token,
-        auth_token: '',
-        session_model: resolveModelId('minimax-m2.7'),
-        added_at: new Date().toISOString(),
-        paused: false,
-      })
+      log('no accounts configured — add one via the dashboard after startup')
     }
 
     const server = await createServer()
