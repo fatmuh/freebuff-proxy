@@ -532,6 +532,22 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
   opacity: 0.9;
 }
 
+.poll-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: pulse 1.5s ease-in-out infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 .model-binding-grid {
   display: flex;
   flex-direction: column;

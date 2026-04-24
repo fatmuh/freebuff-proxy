@@ -46,7 +46,7 @@ function hashFingerprint(fingerprintId: string): string {
 
 // ─── HTTP Helpers ──────────────────────────────────────────────
 
-const AUTH_BASE = 'https://www.freebuff.com'
+const AUTH_BASE = 'https://freebuff.com'
 const AUTH_USER_AGENT = 'Bun/1.3.11'
 
 async function authPost(path: string, body: unknown): Promise<{ statusCode: number; data: unknown }> {
@@ -98,6 +98,7 @@ export async function authenticate(log: (...args: unknown[]) => void): Promise<s
   const codeData = codeResp.data as AuthCodeResponse
   const loginUrl = codeData.loginUrl
   const expiresAt = codeData.expiresAt
+  const serverFingerprintHash = codeData.fingerprintHash
 
   if (!loginUrl) {
     throw new Error(`auth: no loginUrl in response: ${JSON.stringify(codeData)}`)
@@ -116,7 +117,7 @@ export async function authenticate(log: (...args: unknown[]) => void): Promise<s
   // Step 3: Poll GET /api/auth/cli/status every 3s
   const pollInterval = 3_000
   const expiresTime = expiresAt || Date.now() + 10 * 60 * 1000
-  const statusPath = `/api/auth/cli/status?fingerprintId=${encodeURIComponent(fingerprintId)}&fingerprintHash=${encodeURIComponent(fingerprintHash)}&expiresAt=${expiresAt}`
+  const statusPath = `/api/auth/cli/status?fingerprintId=${encodeURIComponent(fingerprintId)}&fingerprintHash=${encodeURIComponent(serverFingerprintHash)}&expiresAt=${expiresAt}`
 
   while (Date.now() < expiresTime) {
     await sleep(pollInterval)
@@ -174,6 +175,7 @@ export function startWebAuthFlow(log: (...args: unknown[]) => void): Promise<Web
     const codeData = codeResp.data as AuthCodeResponse
     const loginUrl = codeData.loginUrl
     const expiresAt = codeData.expiresAt
+    const serverFingerprintHash = codeData.fingerprintHash
 
     if (!loginUrl) {
       throw new Error(`auth: no loginUrl in response: ${JSON.stringify(codeData)}`)
@@ -192,7 +194,7 @@ export function startWebAuthFlow(log: (...args: unknown[]) => void): Promise<Web
     // Background poll
     const pollInterval = 3_000
     const expiresTime = expiresAt || Date.now() + 10 * 60 * 1000
-    const statusPath = `/api/auth/cli/status?fingerprintId=${encodeURIComponent(fingerprintId)}&fingerprintHash=${encodeURIComponent(fingerprintHash)}&expiresAt=${expiresAt}`
+    const statusPath = `/api/auth/cli/status?fingerprintId=${encodeURIComponent(fingerprintId)}&fingerprintHash=${encodeURIComponent(serverFingerprintHash)}&expiresAt=${expiresAt}`
 
     const poll = async () => {
       while (Date.now() < expiresTime) {
@@ -201,6 +203,7 @@ export function startWebAuthFlow(log: (...args: unknown[]) => void): Promise<Web
 
         try {
           const statusResp = await authGet(statusPath)
+          log(`auth flow ${flowId}: poll status ${statusResp.statusCode}`)
           if (statusResp.statusCode === 200) {
             const statusData = statusResp.data as AuthStatusResponse
             if (statusData.user?.authToken) {
@@ -210,6 +213,9 @@ export function startWebAuthFlow(log: (...args: unknown[]) => void): Promise<Web
               log(`auth flow ${flowId}: ✅ authenticated as ${statusData.user.name}`)
               return
             }
+          }
+          if (statusResp.statusCode === 307) {
+            log(`auth flow ${flowId}: got 307 redirect — AUTH_BASE may still point to www.freebuff.com`)
           }
         } catch (err) {
           log(`auth flow ${flowId}: poll error: ${err}`)
@@ -231,4 +237,13 @@ export function getAuthFlowState(flowId: string): WebAuthFlowState | undefined {
 
 export function removeAuthFlow(flowId: string): void {
   activeFlows.delete(flowId)
+}
+
+export function cancelAuthFlow(flowId: string): boolean {
+  const state = activeFlows.get(flowId)
+  if (!state) return false
+  state.status = 'failed'
+  state.error = 'cancelled by user'
+  activeFlows.delete(flowId)
+  return true
 }

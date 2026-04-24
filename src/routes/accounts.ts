@@ -5,7 +5,7 @@ import type { Config } from '../types.js'
 import { resolveModelId } from '../types.js'
 import type { UpstreamClient } from '../upstream.js'
 import { TokenPool } from '../run-manager.js'
-import { startWebAuthFlow, getAuthFlowState, removeAuthFlow } from '../auth.js'
+import { startWebAuthFlow, getAuthFlowState, removeAuthFlow, cancelAuthFlow } from '../auth.js'
 import { maskToken } from '../utils.js'
 
 interface AddAccountBody {
@@ -106,6 +106,16 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: 
     }
 
     return c.json({ status: 'pending' })
+  }
+}
+
+export function handleAuthFlowCancel() {
+  return (c: Context) => {
+    const flowId = c.req.param('flowId')
+    if (!flowId) return c.json({ error: 'flowId is required' }, 400)
+    const cancelled = cancelAuthFlow(flowId)
+    if (!cancelled) return c.json({ error: 'flow not found' }, 404)
+    return c.json({ ok: true, status: 'cancelled' })
   }
 }
 

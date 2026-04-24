@@ -41,6 +41,7 @@ export default function AccountsPanel() {
   const [authFlowId, setAuthFlowId] = createSignal<string | null>(null)
   const [authFlowUrl, setAuthFlowUrl] = createSignal<string | null>(null)
   const [authFlowStatus, setAuthFlowStatus] = createSignal<string>('pending')
+  const [authFlowPollCount, setAuthFlowPollCount] = createSignal(0)
   const [errorMsg, setErrorMsg] = createSignal<string | null>(null)
   const [confirmDelete, setConfirmDelete] = createSignal<string | null>(null)
   const [toasts, setToasts] = createSignal<{ id: number; msg: string; type: string }[]>([])
@@ -75,6 +76,7 @@ export default function AccountsPanel() {
       try {
         const data = await apiGet<{ status: string; accountId?: string; error?: string }>(`/api/accounts/flows/${flowId}/status`)
         setAuthFlowStatus(data.status)
+        setAuthFlowPollCount(prev => prev + 1)
         if (data.status === 'authenticated' || data.status === 'failed') {
           if (authFlowPoll) clearInterval(authFlowPoll)
           setAuthFlowId(null)
@@ -120,12 +122,25 @@ export default function AccountsPanel() {
       setAuthFlowUrl(data.loginUrl)
       setAuthFlowId(data.flowId)
       setAuthFlowStatus('pending')
+      setAuthFlowPollCount(0)
       startAuthFlowPoll(data.flowId)
     } catch (err) {
       setErrorMsg('Failed to start auth flow: ' + err)
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleCancelAuthFlow = async () => {
+    const flowId = authFlowId()
+    if (!flowId) return
+    if (authFlowPoll) clearInterval(authFlowPoll)
+    try { await apiPost(`/api/accounts/flows/${flowId}/cancel`) } catch {}
+    setAuthFlowId(null)
+    setAuthFlowUrl(null)
+    setAuthFlowStatus('pending')
+    setAuthFlowPollCount(0)
+    setShowAdd(false)
   }
 
   const handlePause = async (id: string, paused: boolean) => {
@@ -269,7 +284,11 @@ export default function AccountsPanel() {
             <div class="auth-flow-status">
               <p>Open this URL to authenticate:</p>
               <a href={authFlowUrl()!} target="_blank" rel="noopener" class="auth-flow-link">{authFlowUrl()}</a>
-              <p class="text-muted">Waiting for authentication... (status: {authFlowStatus()})</p>
+              <p class="text-muted">
+                <span class="poll-indicator" />
+                Polling... (status: {authFlowStatus()}, check #{authFlowPollCount()})
+              </p>
+              <button class="btn btn-sm btn-danger" onClick={handleCancelAuthFlow}>Cancel Login</button>
             </div>
           </Show>
         </div>

@@ -11,7 +11,7 @@ import { handleChatCompletions } from './routes/chat.js'
 import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly, handleUsageAnalytics } from './routes/usage.js'
 import { handleRequestsList, handleRequestsPurge } from './routes/requests.js'
 import { handleAuthCheck, handleAuthLogin, handleAuthLogout, dashboardAuthMiddleware } from './routes/auth.js'
-import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus } from './routes/accounts.js'
+import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus, handleAuthFlowCancel } from './routes/accounts.js'
 import { handleKeysList, handleKeysCreate, handleKeysDelete, handleKeysUpdate, handleKeysToggle } from './routes/keys.js'
 import { openAIError, containsString } from './utils.js'
 
@@ -70,6 +70,7 @@ export function createHonoApp(
   app.get('/api/accounts', handleAccountsList(auth))
   app.post('/api/accounts', handleAccountsAdd(auth, runs, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.get('/api/accounts/flows/:flowId/status', handleAuthFlowStatus(auth, runs, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
+  app.post('/api/accounts/flows/:flowId/cancel', handleAuthFlowCancel())
   app.patch('/api/accounts/:id', handleAccountsUpdate(auth, runs))
   app.delete('/api/accounts/:id', handleAccountsDelete(auth, runs))
 
