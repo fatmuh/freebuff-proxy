@@ -3,4 +3,4 @@ dist/
 dist-dashboard/
 data/
 *.log
-config.json
+.env

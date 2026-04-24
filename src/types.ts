@@ -25,11 +25,8 @@ export function resolveModelId(model: string): string {
 export interface Config {
   listenAddr: string
   upstreamBaseURL: string
-  authTokens: string[]
-  tokenModels: string[]        // which primary model each token pool is pinned to
   rotationInterval: number     // ms
-  requestTimeout: number       // ms
-  apiKeys: string[]
+  requestTimeout: number        // ms
   httpProxy: string
 }
 

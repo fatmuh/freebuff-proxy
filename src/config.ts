@@ -1,5 +1,4 @@
 import type { Config } from './types.js'
-import { resolveModelId } from './types.js'
 
 // ─── Duration Parsing ─────────────────────────────────────────
 // Parses human-readable duration strings like "6h", "15m", "30s"
@@ -22,107 +21,35 @@ export function parseDuration(raw: string): number {
 }
 
 // ─── Config Loading ───────────────────────────────────────────
-// Loads from config.json + env var overrides. Same keys as Go version.
+// Env-only with hardcoded defaults. No config.json needed.
 
-interface RawConfig {
-  LISTEN_ADDR: string
-  UPSTREAM_BASE_URL: string
-  AUTH_TOKENS: string[]
-  TOKEN_MODELS: string[]
-  ROTATION_INTERVAL: string
-  REQUEST_TIMEOUT: string
-  API_KEYS: string[]
-  HTTP_PROXY: string
-}
-
-const DEFAULTS: RawConfig = {
-  LISTEN_ADDR: ':9187',
+const DEFAULTS = {
+  LISTEN_ADDR: '0.0.0.0:9187',
   UPSTREAM_BASE_URL: 'https://www.codebuff.com',
-  AUTH_TOKENS: [],
-  TOKEN_MODELS: [],
   ROTATION_INTERVAL: '6h',
   REQUEST_TIMEOUT: '15m',
-  API_KEYS: [],
   HTTP_PROXY: '',
 }
 
-export async function loadConfig(configPath?: string): Promise<Config> {
-  let raw: RawConfig = { ...DEFAULTS }
+export function loadConfig(): Config {
+  const listenAddr = process.env.LISTEN_ADDR?.trim() || DEFAULTS.LISTEN_ADDR
+  const upstreamBaseURL = process.env.UPSTREAM_BASE_URL?.trim() || DEFAULTS.UPSTREAM_BASE_URL
+  const rotationInterval = parseDuration(process.env.ROTATION_INTERVAL?.trim() || DEFAULTS.ROTATION_INTERVAL)
+  const requestTimeout = parseDuration(process.env.REQUEST_TIMEOUT?.trim() || DEFAULTS.REQUEST_TIMEOUT)
+  const httpProxy = process.env.HTTP_PROXY?.trim() || DEFAULTS.HTTP_PROXY
 
-  // Load JSON file if provided or auto-detected
-  if (configPath) {
-    const { readFile } = await import('node:fs/promises')
-    const { resolve } = await import('node:path')
-    const absPath = resolve(configPath)
-    const data = await readFile(absPath, 'utf-8')
-    const parsed = JSON.parse(data)
-    raw = { ...DEFAULTS, ...parsed }
-  }
-
-  // Env var overrides (same keys, comma-separated for arrays)
-  overrideString(raw, 'LISTEN_ADDR')
-  overrideString(raw, 'UPSTREAM_BASE_URL')
-  overrideString(raw, 'ROTATION_INTERVAL')
-  overrideString(raw, 'REQUEST_TIMEOUT')
-  overrideString(raw, 'HTTP_PROXY')
-  overrideCSV(raw, 'AUTH_TOKENS')
-  overrideCSV(raw, 'TOKEN_MODELS')
-  overrideCSV(raw, 'API_KEYS')
-
-  // Parse durations
-  const rotationInterval = parseDuration(raw.ROTATION_INTERVAL)
-  const requestTimeout = parseDuration(raw.REQUEST_TIMEOUT)
-
-  // Build final config
   const cfg: Config = {
-    listenAddr: raw.LISTEN_ADDR.trim(),
-    upstreamBaseURL: raw.UPSTREAM_BASE_URL.trim().replace(/\/+$/, ''),
-    authTokens: dedupeStrings(raw.AUTH_TOKENS),
-    tokenModels: raw.TOKEN_MODELS.map(s => s.trim()).filter(Boolean),
+    listenAddr,
+    upstreamBaseURL: upstreamBaseURL.replace(/\/+$/, ''),
     rotationInterval,
     requestTimeout,
-    apiKeys: dedupeStrings(raw.API_KEYS),
-    httpProxy: raw.HTTP_PROXY.trim(),
+    httpProxy,
   }
 
-  // Validate
   if (!cfg.listenAddr) throw new Error('LISTEN_ADDR cannot be empty')
   if (!cfg.upstreamBaseURL) throw new Error('UPSTREAM_BASE_URL cannot be empty')
-  // authTokens can be empty — auth flow will provide a token at startup
   if (cfg.rotationInterval <= 0) throw new Error('ROTATION_INTERVAL must be greater than zero')
   if (cfg.requestTimeout <= 0) throw new Error('REQUEST_TIMEOUT must be greater than zero')
 
-  // Pad tokenModels to match authTokens length (default to minimax)
-  while (cfg.tokenModels.length < cfg.authTokens.length) {
-    cfg.tokenModels.push(resolveModelId('minimax-m2.7'))
-  }
-
   return cfg
-}
-
-// ─── Helpers ──────────────────────────────────────────────────
-
-function overrideString(raw: RawConfig, key: string): void {
-  const envVal = process.env[key]?.trim()
-  if (envVal) (raw as unknown as Record<string, unknown>)[key] = envVal
-}
-
-function overrideCSV(raw: RawConfig, key: string): void {
-  const envVal = process.env[key]?.trim()
-  if (envVal) {
-    (raw as unknown as Record<string, unknown>)[key] = envVal
-      .split(/[,\n\r]+/)
-      .map((s: string) => s.trim())
-      .filter(Boolean)
-  }
-}
-
-function dedupeStrings(values: string[]): string[] {
-  const seen = new Set<string>()
-  return values.filter(v => {
-    v = v.trim()
-    if (!v || seen.has(v)) return false
-    seen.add(v)
-    return true
-  })
 }
