@@ -15,7 +15,7 @@ export function generateClientSessionId(): string {
 }
 
 export function generateUserAgent(): string {
-  return 'ai-sdk/openai-compatible/1.0.25/codebuff'
+  return 'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.20 runtime/browser'
 }
 
 // ─── Sleep ─────────────────────────────────────────────────────

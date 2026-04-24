@@ -16,7 +16,10 @@ export class UpstreamClient {
     const agent = new Agent({
       keepAliveTimeout: 60_000,
       keepAliveMaxTimeout: 600_000,
-      connect: { timeout: Math.min(requestTimeout / 2, 15_000) },
+      connect: {
+        timeout: Math.min(requestTimeout / 2, 15_000),
+        ALPNProtocols: ['http/1.1'],
+      },
       headersTimeout: requestTimeout,
       bodyTimeout: requestTimeout,
       interceptors: {
@@ -71,8 +74,10 @@ export class UpstreamClient {
       headers: {
         'authorization': `Bearer ${authToken}`,
         'content-type': 'application/json',
-        'accept': 'application/json, text/event-stream',
+        'accept': '*/*',
         'user-agent': this.userAgent,
+        'connection': 'keep-alive',
+        'accept-encoding': 'gzip, deflate, br, zstd',
       },
       body,
     } as ReqOpts) as Promise<Dispatcher.ResponseData>
