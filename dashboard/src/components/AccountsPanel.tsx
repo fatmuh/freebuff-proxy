@@ -309,7 +309,7 @@ export default function AccountsPanel() {
                 </tr>
               </thead>
               <tbody>
-                <For each={accounts()}>
+                <For each={accounts()} by={acct => acct.id}>
                   {(acct) => {
                     const pool = () => getPool(acct.id)
                     return (
@@ -357,12 +357,12 @@ export default function AccountsPanel() {
         <div class="card">
           <h2 class="card-title">MODEL BINDINGS</h2>
           <div class="model-binding-grid">
-            <For each={accountsByModel()}>
+            <For each={accountsByModel()} by={([model]) => model}>
               {([model, accts]) => (
                 <div class="model-binding-row">
                   <div class="model-binding-model mono">{model}</div>
                   <div class="model-binding-accounts">
-                    <For each={accts}>
+                    <For each={accts} by={acct => acct.id}>
                       {(acct) => {
                         const pool = () => getPool(acct.id)
                         return (
@@ -381,7 +381,7 @@ export default function AccountsPanel() {
         </div>
       </Show>
       <div class="toast-container">
-        <For each={toasts()}>
+        <For each={toasts()} by={t => t.id}>
           {(t) => (
             <div class={`toast toast-${t.type}`}>{t.msg}</div>
           )}
