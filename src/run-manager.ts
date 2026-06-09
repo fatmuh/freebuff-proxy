@@ -46,6 +46,7 @@ export class TokenPool {
   session: CachedSession | null = null
   private sessionRefreshPromise: Promise<string | null> | null = null
   private sessionRebuildScheduled = false
+  private idleTimer: ReturnType<typeof setTimeout> | null = null
 
   cooldownUntil: Date | null = null
   lastError = ''
@@ -99,6 +100,7 @@ export class TokenPool {
   }
 
   invalidateSession(reason: string): void {
+    this.clearIdleTimer()
     this.session = null
     if (reason) this.lastError = reason
     this.scheduleSessionRebuild(reason)
@@ -122,6 +124,45 @@ export class TokenPool {
 
   setPaused(paused: boolean): void {
     this._paused = paused
+  }
+
+  // ─── Idle Timer ──────────────────────────────────────────────
+  // Session dies after sessionIdleTimeout ms of no successful requests.
+  // Timer resets ONLY on successful 2xx response (via signalSuccess()),
+  // NOT on acquire — failed requests won't keep the session alive.
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer)
+      this.idleTimer = null
+    }
+  }
+
+  private resetIdleTimer(): void {
+    this.clearIdleTimer()
+    const timeout = this.config.sessionIdleTimeout
+    if (timeout <= 0 || !this.session?.instanceId || this.session.status !== 'active') return
+
+    const savedInstanceId = this.session.instanceId
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null
+      if (this.session?.instanceId !== savedInstanceId) return
+      if (this.hasInflightRequests()) {
+        this.log(`${this.name}: idle timeout hit (inflight) — rescheduling`)
+        this.resetIdleTimer()
+        return
+      }
+      this.log(`${this.name}: session idle ${timeout}ms — ending session`)
+      this.endSessionNow().catch(err => {
+        this.log(`${this.name}: idle end-session error:`, err)
+      })
+    }, timeout)
+  }
+
+  /** Call after a successful 2xx upstream response to reset the idle timer.
+   *  NOT called on acquire — only successful requests keep the session alive. */
+  signalSuccess(): void {
+    this.resetIdleTimer()
   }
 
   // ─── Session Persistence ──────────────────────────────────────
@@ -156,6 +197,7 @@ export class TokenPool {
         this.log(`${this.name}: ✅ restored session ${saved.instanceId} (expires ${expiresAt?.toISOString() ?? 'unknown'})`)
         this.watchSessionExpiry(saved.instanceId, expiresAt)
         this.persistSessionState()  // refresh saved timestamp
+        this.resetIdleTimer()
         return saved.instanceId
       }
 
@@ -306,6 +348,7 @@ export class TokenPool {
   }
 
   async shutdown(): Promise<void> {
+    this.clearIdleTimer()
     // DON'T finish runs or end session on shutdown.
     // Runs expire on their own at codebuff's backend.
     // Sessions expire after ~1hr naturally.
@@ -340,6 +383,7 @@ export class TokenPool {
         this.lastError = ''
         this.watchSessionExpiry(result.instanceId, result.expiresAt)
         this.persistSessionState()  // save to disk for restart reuse
+        this.resetIdleTimer()
         return result.instanceId
       }
       if (result.status === 'queued' && result.instanceId) {
@@ -437,6 +481,7 @@ export class TokenPool {
             this.log(`${this.name}: bg poll → active!`)
             this.watchSessionExpiry(instanceId, exp)
             this.persistSessionState()  // save to disk
+            this.resetIdleTimer()
             return
           }
           if (state.status.trim() === 'queued') {
@@ -490,6 +535,7 @@ export class TokenPool {
   }
 
   async endSessionNow(): Promise<void> {
+    this.clearIdleTimer()
     const s = this.session
     this.session = null
     if (!s || s.status === 'disabled' || !s.instanceId) return

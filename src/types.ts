@@ -28,6 +28,7 @@ export interface Config {
   rotationInterval: number     // ms
   requestTimeout: number        // ms
   httpProxy: string
+  sessionIdleTimeout: number    // ms; 0 = keep session alive indefinitely
 }
 
 // ─── Session ──────────────────────────────────────────────────

@@ -29,6 +29,7 @@ const DEFAULTS = {
   ROTATION_INTERVAL: '6h',
   REQUEST_TIMEOUT: '15m',
   HTTP_PROXY: '',
+  SESSION_IDLE_TIMEOUT: '10m',
 }
 
 export function loadConfig(): Config {
@@ -37,6 +38,7 @@ export function loadConfig(): Config {
   const rotationInterval = parseDuration(process.env.ROTATION_INTERVAL?.trim() || DEFAULTS.ROTATION_INTERVAL)
   const requestTimeout = parseDuration(process.env.REQUEST_TIMEOUT?.trim() || DEFAULTS.REQUEST_TIMEOUT)
   const httpProxy = process.env.HTTP_PROXY?.trim() || DEFAULTS.HTTP_PROXY
+  const sessionIdleTimeout = parseDuration(process.env.SESSION_IDLE_TIMEOUT?.trim() || DEFAULTS.SESSION_IDLE_TIMEOUT)
 
   const cfg: Config = {
     listenAddr,
@@ -44,6 +46,7 @@ export function loadConfig(): Config {
     rotationInterval,
     requestTimeout,
     httpProxy,
+    sessionIdleTimeout,
   }
 
   if (!cfg.listenAddr) throw new Error('LISTEN_ADDR cannot be empty')
