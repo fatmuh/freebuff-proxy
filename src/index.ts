@@ -4,6 +4,7 @@ import { UpstreamClient } from './upstream.js'
 import { ModelRegistry } from './model-registry.js'
 import { RunManager, TokenPool } from './run-manager.js'
 import { AuthStore } from './auth-store.js'
+import { ProxyStore } from './proxy-store.js'
 import { DB } from './db.js'
 import { createHonoApp } from './server.js'
 import { generateUserAgent } from './utils.js'
@@ -28,6 +29,31 @@ export async function createServer(): Promise<FreebuffProxy> {
   const auth = new AuthStore('data', log)
   await auth.load()
 
+  const proxyStore = new ProxyStore('data', log)
+  await proxyStore.load()
+
+  // Auto-import HTTP_PROXY env var into ProxyStore if set and not already imported
+  if (cfg.httpProxy && !proxyStore.getProxy('env-default')) {
+    const envUrl = new URL(cfg.httpProxy)
+    const entry = {
+      id: 'env-default',
+      name: 'Env HTTP_PROXY',
+      type: 'http' as const,
+      host: envUrl.hostname,
+      port: parseInt(envUrl.port, 10) || 8080,
+      username: decodeURIComponent(envUrl.username || ''),
+      password: decodeURIComponent(envUrl.password || ''),
+      created_at: new Date().toISOString(),
+    }
+    proxyStore.addProxy(entry)
+    log('auto-imported HTTP_PROXY env var as proxy', entry.id)
+  }
+
+  // Register all proxy dispatchers with upstream client
+  for (const proxy of proxyStore.listProxies()) {
+    client.registerProxy(proxy)
+  }
+
   const runs = new RunManager(cfg, client, log)
 
   // Load accounts from auth.json into RunManager
@@ -40,6 +66,8 @@ export async function createServer(): Promise<FreebuffProxy> {
       cfg,
       client,
       log,
+      'data/session-state.json',
+      acct.proxy_id,
     )
     runs.addPool(pool)
   }
@@ -51,7 +79,7 @@ export async function createServer(): Promise<FreebuffProxy> {
     db.cleanExpiredSessions()
   }, 6 * 3600_000)
 
-  const app = createHonoApp(cfg, registry, runs, auth, db, client)
+  const app = createHonoApp(cfg, registry, runs, auth, db, client, proxyStore)
 
   const port = parsePort(cfg.listenAddr)
   const server = serve({

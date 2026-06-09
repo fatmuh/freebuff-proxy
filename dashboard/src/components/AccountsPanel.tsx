@@ -7,8 +7,16 @@ interface Account {
   email: string
   user_id: string
   session_model: string
+  proxy_id: string
   added_at: string
   paused: boolean
+}
+
+interface ProxyInfo {
+  id: string
+  name: string
+  type: string
+  url_safe: string
 }
 
 interface Pool {
@@ -31,12 +39,14 @@ interface Pool {
 export default function AccountsPanel() {
   const [accounts, setAccounts] = createSignal<Account[]>([])
   const [pools, setPools] = createSignal<Pool[]>([])
+  const [proxyList, setProxyList] = createSignal<ProxyInfo[]>([])
   const [showAdd, setShowAdd] = createSignal(false)
   const [addMode, setAddMode] = createSignal<'manual' | 'web'>('web')
   const [token, setToken] = createSignal('')
   const [name, setName] = createSignal('')
   const [email, setEmail] = createSignal('')
   const [model, setModel] = createSignal('minimax-m2.7')
+  const [addProxyId, setAddProxyId] = createSignal('')
   const [loading, setLoading] = createSignal(false)
   const [authFlowId, setAuthFlowId] = createSignal<string | null>(null)
   const [authFlowUrl, setAuthFlowUrl] = createSignal<string | null>(null)
@@ -47,6 +57,14 @@ export default function AccountsPanel() {
   const [toasts, setToasts] = createSignal<{ id: number; msg: string; type: string }[]>([])
   let toastId = 0
 
+  const isEditingFormControl = () => {
+    if (typeof document === 'undefined') return false
+    const el = document.activeElement
+    return el instanceof HTMLInputElement
+      || el instanceof HTMLSelectElement
+      || el instanceof HTMLTextAreaElement
+    }
+
   const addToast = (msg: string, type = 'info') => {
     const id = ++toastId
     setToasts(prev => [...prev, { id, msg, type }])
@@ -55,10 +73,13 @@ export default function AccountsPanel() {
 
   const refresh = async () => {
     try {
-      const [acctData, poolData] = await Promise.all([
+      const [acctData, poolData, proxyData] = await Promise.all([
         apiGet<{ accounts: Account[] }>('/api/accounts'),
         apiGet<{ pools: Pool[] }>('/api/pools'),
+        apiGet<{ proxies: ProxyInfo[] }>('/api/proxies'),
       ])
+      if (isEditingFormControl()) return
+      setProxyList(proxyData.proxies.map((p: any) => ({ id: p.id, name: p.name, type: p.type, url_safe: p.url_safe })))
       setAccounts(acctData.accounts)
       setPools(poolData.pools)
     } catch {}
@@ -98,6 +119,7 @@ export default function AccountsPanel() {
         name: name() || undefined,
         email: email() || undefined,
         session_model: model(),
+        proxy_id: addProxyId() || undefined,
       })
       setShowAdd(false)
       setToken('')
@@ -165,6 +187,17 @@ export default function AccountsPanel() {
     addToast(`Switching to ${shortModel}...`, 'info')
     await apiPatch(`/api/accounts/${id}`, { session_model: newModel })
     refresh()
+  }
+
+  const handleBindProxy = async (id: string, proxyId: string) => {
+    setAccounts(prev => prev.map(acct => (
+      acct.id === id ? { ...acct, proxy_id: proxyId } : acct
+    )))
+    try {
+      await apiPatch(`/api/accounts/${id}`, { proxy_id: proxyId })
+    } finally {
+      refresh()
+    }
   }
 
   const getPool = (id: string) => pools().find(p => p.name === id)
@@ -260,6 +293,14 @@ export default function AccountsPanel() {
                   <option value="minimax-m2.7">minimax-m2.7</option>
                   <option value="glm-5.1">glm-5.1</option>
                 </select>
+                <select value={addProxyId()} onChange={(e) => setAddProxyId(e.currentTarget.value)}>
+                  <option value="">No Proxy (Direct)</option>
+                  <For each={proxyList()} by={p => p.id}>
+                    {(p) => (
+                      <option value={p.id}>{p.name} ({p.type})</option>
+                    )}
+                  </For>
+                </select>
                 <button class="btn btn-primary" onClick={handleAddWebAuth} disabled={loading()}>
                   {loading() ? 'Starting...' : 'Start Auth Flow'}
                 </button>
@@ -273,6 +314,14 @@ export default function AccountsPanel() {
                 <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
                   <option value="minimax-m2.7">minimax-m2.7</option>
                   <option value="glm-5.1">glm-5.1</option>
+                </select>
+                <select value={addProxyId()} onChange={(e) => setAddProxyId(e.currentTarget.value)}>
+                  <option value="">No Proxy (Direct)</option>
+                  <For each={proxyList()} by={p => p.id}>
+                    {(p) => (
+                      <option value={p.id}>{p.name} ({p.type})</option>
+                    )}
+                  </For>
                 </select>
                 <button class="btn btn-primary" onClick={handleAddManual} disabled={loading() || !token()}>
                   {loading() ? 'Adding...' : 'Add'}
@@ -299,14 +348,15 @@ export default function AccountsPanel() {
           <div class="table-wrapper">
             <table class="data-table">
               <thead>
-                <tr>
-                  <th>NAME</th>
-                  <th>EMAIL</th>
-                  <th>MODEL</th>
-                  <th>STATUS</th>
-                  <th>QUEUE DETAIL</th>
-                  <th>ACTIONS</th>
-                </tr>
+                  <tr>
+                    <th>NAME</th>
+                    <th>EMAIL</th>
+                    <th>MODEL</th>
+                    <th>PROXY</th>
+                    <th>STATUS</th>
+                    <th>QUEUE DETAIL</th>
+                    <th>ACTIONS</th>
+                  </tr>
               </thead>
               <tbody>
                 <For each={accounts()} by={acct => acct.id}>
@@ -324,6 +374,19 @@ export default function AccountsPanel() {
                           >
                             <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
                             <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            value={acct.proxy_id || ''}
+                            onChange={(e) => handleBindProxy(acct.id, e.currentTarget.value)}
+                          >
+                            <option value="" selected={!acct.proxy_id}>Direct</option>
+                            <For each={proxyList()} by={p => p.id}>
+                              {(p) => (
+                                <option value={p.id} selected={acct.proxy_id === p.id}>{p.name} ({p.type})</option>
+                              )}
+                            </For>
                           </select>
                         </td>
                         <td>{statusBadge(pool())}</td>

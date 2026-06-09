@@ -6,13 +6,15 @@ import type { RunManager } from './run-manager.js'
 import type { AuthStore } from './auth-store.js'
 import type { DB } from './db.js'
 import type { UpstreamClient } from './upstream.js'
+import type { ProxyStore } from './proxy-store.js'
 import { handleModels } from './routes/models.js'
 import { handleChatCompletions } from './routes/chat.js'
 import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly, handleUsageAnalytics } from './routes/usage.js'
 import { handleRequestsList, handleRequestsPurge } from './routes/requests.js'
 import { handleAuthCheck, handleAuthLogin, handleAuthLogout, dashboardAuthMiddleware } from './routes/auth.js'
 import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus, handleAuthFlowCancel } from './routes/accounts.js'
-import { handleKeysList, handleKeysCreate, handleKeysDelete, handleKeysUpdate, handleKeysToggle } from './routes/keys.js'
+import { handleKeysList, handleKeysCreate, handleKeysDelete, handleKeysToggle, handleKeysUpdate } from './routes/keys.js'
+import { handleProxiesList, handleProxiesCreate, handleProxiesUpdate, handleProxiesDelete, handleProxiesTest } from './routes/proxies.js'
 import { openAIError, containsString } from './utils.js'
 
 type Variables = { apiKey: string }
@@ -24,6 +26,7 @@ export function createHonoApp(
   auth: AuthStore,
   db: DB,
   upstreamClient: UpstreamClient,
+  proxyStore: ProxyStore,
 ): Hono<{ Variables: Variables }> {
   const app = new Hono<{ Variables: Variables }>()
   const startedAt = new Date()
@@ -81,6 +84,12 @@ export function createHonoApp(
   app.patch('/api/keys/toggle', handleKeysToggle(auth))
   app.delete('/api/keys/:key', handleKeysDelete(auth))
   app.patch('/api/keys/:key', handleKeysUpdate(auth))
+
+  app.get('/api/proxies', handleProxiesList(proxyStore, auth))
+  app.post('/api/proxies', handleProxiesCreate(proxyStore, upstreamClient))
+  app.patch('/api/proxies/:id', handleProxiesUpdate(proxyStore, upstreamClient))
+  app.delete('/api/proxies/:id', handleProxiesDelete(proxyStore, auth, upstreamClient))
+  app.post('/api/proxies/:id/test', handleProxiesTest(proxyStore, upstreamClient))
 
   app.get('/api/usage/summary', handleUsageSummary(db))
   app.get('/api/usage/daily', handleUsageDaily(db))

@@ -9,6 +9,7 @@ export interface Account {
   token: string
   auth_token: string
   session_model: string
+  proxy_id: string
   added_at: string
   paused: boolean
 }
@@ -52,6 +53,7 @@ export class AuthStore {
       if (data.accounts && Array.isArray(data.accounts)) {
         for (const acct of data.accounts) {
           if (acct.id && acct.token) {
+            if (!acct.proxy_id) acct.proxy_id = ''
             this.accounts.set(acct.id, acct)
           }
         }
@@ -118,6 +120,7 @@ export class AuthStore {
       email: a.email,
       user_id: a.user_id,
       session_model: a.session_model,
+      proxy_id: a.proxy_id,
       added_at: a.added_at,
       paused: a.paused,
     }))
@@ -127,10 +130,10 @@ export class AuthStore {
     return [...this.accounts.values()]
   }
 
-  getAccountTokens(): { id: string; token: string; session_model: string }[] {
+  getAccountTokens(): { id: string; token: string; session_model: string; proxy_id: string }[] {
     return [...this.accounts.values()]
       .filter(a => !a.paused)
-      .map(a => ({ id: a.id, token: a.token, session_model: a.session_model }))
+      .map(a => ({ id: a.id, token: a.token, session_model: a.session_model, proxy_id: a.proxy_id }))
   }
 
   // API Key methods

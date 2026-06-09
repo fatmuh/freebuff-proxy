@@ -281,6 +281,8 @@ body {
 .badge-cooldown { color: var(--accent-red); border-color: var(--accent-red); }
 .badge-paused { color: var(--text-muted); }
 .badge-none { color: var(--text-muted); }
+.badge-http { color: var(--primary); border-color: var(--primary); }
+.badge-socks5 { color: var(--accent-mauve); border-color: var(--accent-mauve); }
 
 .table-wrapper { overflow-x: auto; }
 
@@ -312,7 +314,13 @@ body {
 
 .error-cell { color: var(--accent-red); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.actions { display: flex; gap: 6px; }
+.actions {
+  white-space: nowrap;
+}
+
+.actions .btn + .btn {
+  margin-left: 6px;
+}
 
 .btn {
   padding: 8px 16px;
@@ -1051,3 +1059,22 @@ input:focus, select:focus { outline: none; border-color: var(--primary); }
   gap: 4px;
   white-space: nowrap;
 }
+
+/* ── Proxy Panel ── */
+
+.proxy-bound-acct {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 1px 2px;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+  font-size: 0.75rem;
+}
+
+.test-result {
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
+.test-ok { color: var(--accent-green); }
+.test-fail { color: var(--accent-red); }

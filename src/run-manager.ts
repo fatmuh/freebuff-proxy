@@ -35,6 +35,7 @@ export class TokenPool {
   readonly token: string
   sessionModel: string
   readonly upstreamClient: UpstreamClient
+  proxyId: string
 
   private config: Config
   private log: (...args: unknown[]) => void
@@ -60,6 +61,7 @@ export class TokenPool {
     upstreamClient: UpstreamClient,
     log: (...args: unknown[]) => void,
     stateFile: string = 'data/session-state.json',
+    proxyId: string = '',
   ) {
     this.name = name
     this.token = token
@@ -68,6 +70,7 @@ export class TokenPool {
     this.upstreamClient = upstreamClient
     this.log = log
     this.stateFile = stateFile
+    this.proxyId = proxyId
   }
 
   // ─── Public: Session ──────────────────────────────────────────
@@ -136,7 +139,7 @@ export class TokenPool {
       this.log(`${this.name}: found saved session ${saved.instanceId}, checking if still active...`)
 
       // Ask upstream: is this session still active?
-      const state = await this.upstreamClient.getSession(this.token, saved.instanceId)
+      const state = await this.upstreamClient.getSession(this.token, saved.instanceId, this.proxyId)
 
       if (state.status.trim() === 'active') {
         const expiresAt = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
@@ -366,7 +369,7 @@ export class TokenPool {
     position: number; queueDepth: number; estimatedWaitMs: number
   }> {
     let lockedRetries = 0
-    let state = await this.upstreamClient.createSession(this.token, model)
+    let state = await this.upstreamClient.createSession(this.token, model, this.proxyId)
 
     for (;;) {
       switch (state.status.trim()) {
@@ -381,7 +384,7 @@ export class TokenPool {
           this.log(`${this.name}: model_locked, retrying (${lockedRetries}/${MAX_MODEL_LOCKED_RETRIES})`)
           await this.endSessionNow().catch(() => {})
           await sleep(2_000)
-          state = await this.upstreamClient.createSession(this.token, model)
+          state = await this.upstreamClient.createSession(this.token, model, this.proxyId)
           continue
         }
 
@@ -404,12 +407,12 @@ export class TokenPool {
           const delay = smartPollDelay(state.estimatedWaitMs ?? 0)
           this.log(`${this.name}: queued (pos ${state.position}/${state.queueDepth}), polling in ${delay}ms`)
           await sleep(delay)
-          state = await this.upstreamClient.getSession(this.token, id)
+          state = await this.upstreamClient.getSession(this.token, id, this.proxyId)
           continue
         }
 
         case 'none': case 'ended': case 'superseded':
-          state = await this.upstreamClient.createSession(this.token, model)
+          state = await this.upstreamClient.createSession(this.token, model, this.proxyId)
           continue
 
         default:
@@ -426,7 +429,7 @@ export class TokenPool {
         this.log(`${this.name}: bg poll pos=${this.session?.position}/${this.session?.queueDepth}, next ${delay}ms`)
         await sleep(delay)
         try {
-          const state = await this.upstreamClient.getSession(this.token, instanceId)
+          const state = await this.upstreamClient.getSession(this.token, instanceId, this.proxyId)
           if (state.status.trim() === 'active') {
             const exp = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
             this.session = { status: 'active', instanceId, model, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
@@ -491,7 +494,7 @@ export class TokenPool {
     this.session = null
     if (!s || s.status === 'disabled' || !s.instanceId) return
     this.log(`${this.name}: ending session (${s.model}/${s.instanceId})`)
-    await this.upstreamClient.endSession(this.token)
+    await this.upstreamClient.endSession(this.token, this.proxyId)
     this.log(`${this.name}: session ended`)
   }
 
@@ -499,7 +502,7 @@ export class TokenPool {
 
   private async rotateAgent(agentId: string): Promise<void> {
     if (this.isCoolingDown()) throw new Error(`token cooling down until ${this.cooldownUntil!.toISOString()}`)
-    const runId = await this.upstreamClient.startRun(this.token, agentId)
+    const runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
     const oldRun = this._runs.get(agentId)
     this._runs.set(agentId, {
       id: runId, agentId, startedAt: new Date(),
@@ -519,7 +522,7 @@ export class TokenPool {
     if (this._runs.get(run.agentId) === run) return
     run.finishing = true
     try {
-      await this.upstreamClient.finishRun(this.token, run.id, run.requestCount)
+      await this.upstreamClient.finishRun(this.token, run.id, run.requestCount, this.proxyId)
       this.draining = this.draining.filter(r => r !== run)
     } catch (err) {
       run.finishing = false

@@ -1,18 +1,48 @@
-import { request, Agent, interceptors } from 'undici'
+import { request, Agent, ProxyAgent, Socks5ProxyAgent, interceptors } from 'undici'
 import type { Dispatcher } from 'undici'
 import type { FreeSessionResponse } from './types.js'
+import type { ProxyEntry } from './proxy-store.js'
 
 type ReqOpts = Parameters<typeof request>[1]
+
+// Build the right undici dispatcher for a proxy entry
+function createProxyDispatcher(proxy: ProxyEntry, requestTimeout: number): Dispatcher {
+  const scheme = proxy.type === 'socks5' ? 'socks5' : 'http'
+  const auth = proxy.username
+    ? `${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@`
+    : ''
+  const proxyUrl = `${scheme}://${auth}${proxy.host}:${proxy.port}`
+
+  if (proxy.type === 'socks5') {
+    return new Socks5ProxyAgent(proxyUrl, {
+      keepAliveTimeout: 60_000,
+      keepAliveMaxTimeout: 600_000,
+      headersTimeout: requestTimeout,
+      bodyTimeout: requestTimeout,
+    } as Socks5ProxyAgent.Options)
+  }
+
+  return new ProxyAgent({
+    uri: proxyUrl,
+    keepAliveTimeout: 60_000,
+    keepAliveMaxTimeout: 600_000,
+    headersTimeout: requestTimeout,
+    bodyTimeout: requestTimeout,
+  } as ProxyAgent.Options)
+}
 
 export class UpstreamClient {
   private baseURL: string
   private userAgent: string
-  private dispatcher: Dispatcher
+  private defaultDispatcher: Dispatcher
+  private proxyDispatchers = new Map<string, Dispatcher>()
+  private requestTimeout: number
 
   constructor(baseURL: string, requestTimeout: number, userAgent: string) {
     this.baseURL = baseURL
     this.userAgent = userAgent
-    // Agent with redirect interceptor composed in (undici v7 style)
+    this.requestTimeout = requestTimeout
+
     const agent = new Agent({
       keepAliveTimeout: 60_000,
       keepAliveMaxTimeout: 600_000,
@@ -27,19 +57,45 @@ export class UpstreamClient {
       } as unknown as undefined,
     })
 
-    // Prevent unhandled socket errors (e.g. "other side closed") from crashing
+    // @ts-expect-error undici Agent emits connectionError but types don't declare it
     agent.on('connectionError', (err: Error) => {
       console.log('[upstream] connection error (handled):', err.message)
     })
 
-    this.dispatcher = agent
+    this.defaultDispatcher = agent
+  }
+
+  // Register or update a proxy dispatcher for a proxy entry
+  registerProxy(proxy: ProxyEntry): void {
+    const existing = this.proxyDispatchers.get(proxy.id)
+    if (existing) {
+      try { existing.close() } catch { /* ignore */ }
+    }
+    this.proxyDispatchers.set(proxy.id, createProxyDispatcher(proxy, this.requestTimeout))
+  }
+
+  // Remove a proxy dispatcher
+  unregisterProxy(proxyId: string): void {
+    const existing = this.proxyDispatchers.get(proxyId)
+    if (existing) {
+      try { existing.close() } catch { /* ignore */ }
+      this.proxyDispatchers.delete(proxyId)
+    }
+  }
+
+  // Get dispatcher for an account's bound proxy (or default if none)
+  getDispatcher(proxyId?: string): Dispatcher {
+    if (proxyId && this.proxyDispatchers.has(proxyId)) {
+      return this.proxyDispatchers.get(proxyId)!
+    }
+    return this.defaultDispatcher
   }
 
   // ─── Run Management ──────────────────────────────────────────
 
-  async startRun(authToken: string, agentId: string): Promise<string> {
+  async startRun(authToken: string, agentId: string, proxyId?: string): Promise<string> {
     const body = JSON.stringify({ action: 'START', agentId })
-    const { statusCode, body: respBody } = await this.doPost(authToken, '/api/v1/agent-runs', body)
+    const { statusCode, body: respBody } = await this.doPost(authToken, '/api/v1/agent-runs', body, proxyId)
 
     const text = await respBody.text()
     if (statusCode < 200 || statusCode >= 300) {
@@ -52,12 +108,12 @@ export class UpstreamClient {
     return runId
   }
 
-  async finishRun(authToken: string, runId: string, totalSteps: number): Promise<void> {
+  async finishRun(authToken: string, runId: string, totalSteps: number, proxyId?: string): Promise<void> {
     const body = JSON.stringify({
       action: 'FINISH', runId, status: 'completed',
       totalSteps, directCredits: 0, totalCredits: 0,
     })
-    const { statusCode, body: respBody } = await this.doPost(authToken, '/api/v1/agent-runs', body)
+    const { statusCode, body: respBody } = await this.doPost(authToken, '/api/v1/agent-runs', body, proxyId)
     const text = await respBody.text()
     if (statusCode < 200 || statusCode >= 300) {
       throw new Error(`finish run failed: ${statusCode} ${text.trim()}`)
@@ -66,10 +122,10 @@ export class UpstreamClient {
 
   // ─── Chat Completions ────────────────────────────────────────
 
-  async chatCompletions(authToken: string, body: string): Promise<Dispatcher.ResponseData> {
+  async chatCompletions(authToken: string, body: string, proxyId?: string): Promise<Dispatcher.ResponseData> {
     const url = this.buildURL('/api/v1/chat/completions')
     return request(url, {
-      ...this.baseOpts(),
+      ...this.baseOpts(proxyId),
       method: 'POST',
       headers: {
         'authorization': `Bearer ${authToken}`,
@@ -85,10 +141,10 @@ export class UpstreamClient {
 
   // ─── Session Management ──────────────────────────────────────
 
-  async createSession(authToken: string, model: string): Promise<FreeSessionResponse> {
+  async createSession(authToken: string, model: string, proxyId?: string): Promise<FreeSessionResponse> {
     const url = this.buildURL('/api/v1/freebuff/session')
     const { statusCode, body } = await request(url, {
-      ...this.baseOpts(),
+      ...this.baseOpts(proxyId),
       method: 'POST',
       headers: {
         'authorization': `Bearer ${authToken}`,
@@ -100,10 +156,10 @@ export class UpstreamClient {
     return this.parseSessionResponse(statusCode, body)
   }
 
-  async getSession(authToken: string, instanceId: string): Promise<FreeSessionResponse> {
+  async getSession(authToken: string, instanceId: string, proxyId?: string): Promise<FreeSessionResponse> {
     const url = this.buildURL('/api/v1/freebuff/session')
     const { statusCode, body } = await request(url, {
-      ...this.baseOpts(),
+      ...this.baseOpts(proxyId),
       method: 'GET',
       headers: {
         'authorization': `Bearer ${authToken}`,
@@ -115,10 +171,10 @@ export class UpstreamClient {
     return this.parseSessionResponse(statusCode, body)
   }
 
-  async endSession(authToken: string): Promise<void> {
+  async endSession(authToken: string, proxyId?: string): Promise<void> {
     const url = this.buildURL('/api/v1/freebuff/session')
     const { statusCode, body } = await request(url, {
-      ...this.baseOpts(),
+      ...this.baseOpts(proxyId),
       method: 'DELETE',
       headers: {
         'authorization': `Bearer ${authToken}`,
@@ -154,18 +210,19 @@ export class UpstreamClient {
     return `${this.baseURL}${path}`
   }
 
-  private baseOpts(): Record<string, unknown> {
-    return { dispatcher: this.dispatcher }
+  private baseOpts(proxyId?: string): Record<string, unknown> {
+    return { dispatcher: this.getDispatcher(proxyId) }
   }
 
   private async doPost(
     authToken: string,
     path: string,
     body: string,
+    proxyId?: string,
   ): Promise<{ statusCode: number; body: Dispatcher.ResponseData['body'] }> {
     const url = this.buildURL(path)
     const result = await request(url, {
-      ...this.baseOpts(),
+      ...this.baseOpts(proxyId),
       method: 'POST',
       headers: {
         'authorization': `Bearer ${authToken}`,

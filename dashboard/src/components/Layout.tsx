@@ -6,6 +6,7 @@ import { apiGet } from '../lib/api'
 const NAV_ITEMS = [
   { href: '/', label: 'Home' },
   { href: '/accounts', label: 'Accounts' },
+  { href: '/proxies', label: 'Proxies' },
   { href: '/keys', label: 'API Keys' },
   { href: '/usage', label: 'Usage' },
   { href: '/requests', label: 'Requests' },

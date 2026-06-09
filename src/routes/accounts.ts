@@ -15,12 +15,14 @@ interface AddAccountBody {
   user_id?: string
   auth_token?: string
   session_model?: string
+  proxy_id?: string
 }
 
 interface UpdateAccountBody {
   name?: string
   session_model?: string
   paused?: boolean
+  proxy_id?: string
 }
 
 export function handleAccountsList(auth: AuthStore) {
@@ -45,12 +47,13 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Con
         token: body.token,
         auth_token: body.auth_token ?? '',
         session_model: resolveModelId(body.session_model ?? 'minimax-m2.7'),
+        proxy_id: body.proxy_id ?? '',
         added_at: new Date().toISOString(),
         paused: false,
       }
 
       auth.addAccount(account)
-      const pool = new TokenPool(id, account.token, account.session_model, config, client, log)
+      const pool = new TokenPool(id, account.token, account.session_model, config, client, log, 'data/session-state.json', account.proxy_id)
       runs.addPool(pool)
       return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } }, 201)
     }
@@ -84,12 +87,13 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: 
         token: state.authToken,
         auth_token: '',
         session_model: resolveModelId('minimax-m2.7'),
+        proxy_id: '',
         added_at: new Date().toISOString(),
         paused: false,
       }
 
       auth.addAccount(account)
-      const pool = new TokenPool(id, account.token, account.session_model, config, client, log)
+      const pool = new TokenPool(id, account.token, account.session_model, config, client, log, 'data/session-state.json', account.proxy_id)
       runs.addPool(pool)
       removeAuthFlow(flowId)
 
@@ -131,6 +135,12 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager) {
     }
 
     if (body.name !== undefined) account.name = body.name
+
+    if (body.proxy_id !== undefined && body.proxy_id !== account.proxy_id) {
+      account.proxy_id = body.proxy_id
+      const pool = runs.getPoolByName(id)
+      if (pool) pool.proxyId = body.proxy_id
+    }
 
     if (body.paused !== undefined && body.paused !== account.paused) {
       account.paused = body.paused

@@ -85,6 +85,7 @@ export function handleChatCompletions(
         const resp = await lease.pool.upstreamClient.chatCompletions(
           lease.pool.token,
           upstreamBody,
+          lease.pool.proxyId || undefined,
         )
         statusCode = resp.statusCode
         headers = resp.headers as Record<string, string | string[] | undefined>
