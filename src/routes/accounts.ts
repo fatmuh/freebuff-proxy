@@ -50,6 +50,8 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Con
         proxy_id: body.proxy_id ?? '',
         added_at: new Date().toISOString(),
         paused: false,
+        serve_status: 'active',
+        account_status: 'idle',
       }
 
       auth.addAccount(account)
@@ -90,6 +92,8 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: 
         proxy_id: '',
         added_at: new Date().toISOString(),
         paused: false,
+        serve_status: 'active',
+        account_status: 'idle',
       }
 
       auth.addAccount(account)

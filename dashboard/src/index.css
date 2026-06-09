@@ -283,6 +283,8 @@ body {
 .badge-none { color: var(--text-muted); }
 .badge-http { color: var(--primary); border-color: var(--primary); }
 .badge-socks5 { color: var(--accent-mauve); border-color: var(--accent-mauve); }
+.badge-serve-active { color: var(--accent-green); border-color: var(--accent-green); }
+.badge-serve-inactive { color: var(--accent-red); border-color: var(--accent-red); }
 
 .table-wrapper { overflow-x: auto; }
 

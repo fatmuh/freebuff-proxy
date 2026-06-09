@@ -10,6 +10,8 @@ interface Account {
   proxy_id: string
   added_at: string
   paused: boolean
+  serve_status: 'active' | 'inactive'
+  account_status: 'idle' | 'active' | 'queued'
 }
 
 interface ProxyInfo {
@@ -353,7 +355,8 @@ export default function AccountsPanel() {
                     <th>EMAIL</th>
                     <th>MODEL</th>
                     <th>PROXY</th>
-                    <th>STATUS</th>
+                    <th>SERVE STATUS</th>
+                    <th>SESSION STATUS</th>
                     <th>QUEUE DETAIL</th>
                     <th>ACTIONS</th>
                   </tr>
@@ -388,6 +391,16 @@ export default function AccountsPanel() {
                               )}
                             </For>
                           </select>
+                        </td>
+                        <td>
+                          <span class={`badge ${acct.serve_status === 'active' ? 'badge-serve-active' : 'badge-serve-inactive'}`}>
+                            {acct.serve_status}
+                          </span>
+                        </td>
+                        <td>
+                          <span class={`badge ${acct.account_status === 'active' ? 'badge-active' : acct.account_status === 'queued' ? 'badge-queued' : 'badge-none'}`}>
+                            {acct.account_status}
+                          </span>
                         </td>
                         <td>{statusBadge(pool())}</td>
                         <td class="mono">

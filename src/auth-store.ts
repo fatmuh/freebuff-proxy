@@ -1,6 +1,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 
+export type ServeStatus = 'active' | 'inactive'
+export type AccountStatus = 'idle' | 'active' | 'queued'
+
 export interface Account {
   id: string
   name: string
@@ -12,6 +15,8 @@ export interface Account {
   proxy_id: string
   added_at: string
   paused: boolean
+  serve_status: ServeStatus
+  account_status: AccountStatus
 }
 
 export interface ApiKeyEntry {
@@ -37,6 +42,7 @@ export class AuthStore {
   private _keysEnabled = true
   private filePath: string
   private log: (...args: unknown[]) => void
+  private modelIndex = new Map<string, Account[]>()
 
   constructor(dataDir: string, log: (...args: unknown[]) => void) {
     this.filePath = resolve(dataDir, 'auth.json')
@@ -54,10 +60,13 @@ export class AuthStore {
         for (const acct of data.accounts) {
           if (acct.id && acct.token) {
             if (!acct.proxy_id) acct.proxy_id = ''
+            if (!acct.serve_status) acct.serve_status = 'active'
+            if (!acct.account_status) acct.account_status = 'idle'
             this.accounts.set(acct.id, acct)
           }
         }
       }
+      this.rebuildModelIndex()
       if (data.api_keys && Array.isArray(data.api_keys)) {
         for (const k of data.api_keys) {
           if (k.key) {
@@ -83,7 +92,10 @@ export class AuthStore {
   }
 
   addAccount(account: Account): void {
+    if (!account.serve_status) account.serve_status = 'active'
+    if (!account.account_status) account.account_status = 'idle'
     this.accounts.set(account.id, account)
+    this.rebuildModelIndex()
     this.persist()
     this.log('auth store: added account', account.id, account.email)
   }
@@ -101,12 +113,14 @@ export class AuthStore {
 
   updateAccount(account: Account): void {
     this.accounts.set(account.id, account)
+    this.rebuildModelIndex()
     this.persist()
   }
 
   removeAccount(id: string): boolean {
     const deleted = this.accounts.delete(id)
     if (deleted) {
+      this.rebuildModelIndex()
       this.persist()
       this.log('auth store: removed account', id)
     }
@@ -123,6 +137,8 @@ export class AuthStore {
       proxy_id: a.proxy_id,
       added_at: a.added_at,
       paused: a.paused,
+      serve_status: a.serve_status,
+      account_status: a.account_status,
     }))
   }
 
@@ -197,6 +213,24 @@ export class AuthStore {
   getApiKeyId(apiKey: string): string | null {
     const entry = this.apiKeys.get(apiKey)
     return entry?.id ?? null
+  }
+
+  getModelIndex(): Map<string, Account[]> {
+    return this.modelIndex
+  }
+
+  getAccountsForModel(model: string): Account[] {
+    return this.modelIndex.get(model) ?? []
+  }
+
+  private rebuildModelIndex(): void {
+    const idx = new Map<string, Account[]>()
+    for (const acct of this.accounts.values()) {
+      const model = acct.session_model
+      if (!idx.has(model)) idx.set(model, [])
+      idx.get(model)!.push(acct)
+    }
+    this.modelIndex = idx
   }
 
   private async persist(): Promise<void> {
