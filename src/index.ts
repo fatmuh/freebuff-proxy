@@ -8,7 +8,7 @@ import { AuthStore } from './auth-store.js'
 import { ProxyStore } from './proxy-store.js'
 import { DB } from './db.js'
 import { createHonoApp } from './server.js'
-import { generateUserAgent } from './utils.js'
+import { BUN_USER_AGENT } from './utils.js'
 import { serve } from '@hono/node-server'
 
 export interface FreebuffProxy {
@@ -21,8 +21,7 @@ export async function createServer(): Promise<FreebuffProxy> {
 
   const log = (...args: unknown[]) => console.log('[Freebuff2API]', ...args)
 
-  const userAgent = generateUserAgent()
-  const client = new UpstreamClient(cfg.upstreamBaseURL, cfg.requestTimeout, userAgent)
+  const client = new UpstreamClient(cfg.upstreamBaseURL, cfg.requestTimeout, BUN_USER_AGENT)
 
   const registry = new ModelRegistry(client, log)
   await registry.start()
