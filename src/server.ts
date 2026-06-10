@@ -10,6 +10,7 @@ import type { UpstreamClient } from './upstream.js'
 import type { ProxyStore } from './proxy-store.js'
 import { handleModels } from './routes/models.js'
 import { handleChatCompletions } from './routes/chat.js'
+import { handleResponses } from './routes/responses.js'
 import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly, handleUsageAnalytics } from './routes/usage.js'
 import { handleRequestsList, handleRequestsPurge } from './routes/requests.js'
 import { handleAuthCheck, handleAuthLogin, handleAuthLogout, dashboardAuthMiddleware } from './routes/auth.js'
@@ -67,6 +68,7 @@ export function createHonoApp(
 
   app.get('/v1/models', handleModels(registry, startedAt))
   app.all('/v1/chat/completions', handleChatCompletions(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey)))
+  app.post('/v1/responses', handleResponses(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey)))
 
   app.get('/api/auth/check', handleAuthCheck())
   app.post('/api/auth/login', handleAuthLogin(db))
