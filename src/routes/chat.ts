@@ -111,6 +111,7 @@ export function handleChatCompletions(
           }
         }
 
+        lease.pool.signalSuccess()
         runs.release(lease)
         const latency = Date.now() - startTime
         console.log(`[${lease.pool.name}] request completed in ${latency}ms (status: ${statusCode})`)
