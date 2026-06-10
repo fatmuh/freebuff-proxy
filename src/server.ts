@@ -3,6 +3,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import type { Config } from './types.js'
 import type { ModelRegistry } from './model-registry.js'
 import type { RunManager } from './run-manager.js'
+import type { ModelPoolManager } from './model-pool-manager.js'
 import type { AuthStore } from './auth-store.js'
 import type { DB } from './db.js'
 import type { UpstreamClient } from './upstream.js'
@@ -23,6 +24,7 @@ export function createHonoApp(
   cfg: Config,
   registry: ModelRegistry,
   runs: RunManager,
+  poolManager: ModelPoolManager,
   auth: AuthStore,
   db: DB,
   upstreamClient: UpstreamClient,
@@ -71,11 +73,11 @@ export function createHonoApp(
   app.post('/api/auth/logout', handleAuthLogout(db))
 
   app.get('/api/accounts', handleAccountsList(auth))
-  app.post('/api/accounts', handleAccountsAdd(auth, runs, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
-  app.get('/api/accounts/flows/:flowId/status', handleAuthFlowStatus(auth, runs, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
+  app.post('/api/accounts', handleAccountsAdd(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
+  app.get('/api/accounts/flows/:flowId/status', handleAuthFlowStatus(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.post('/api/accounts/flows/:flowId/cancel', handleAuthFlowCancel())
   app.patch('/api/accounts/:id', handleAccountsUpdate(auth, runs))
-  app.delete('/api/accounts/:id', handleAccountsDelete(auth, runs))
+  app.delete('/api/accounts/:id', handleAccountsDelete(auth, runs, poolManager))
 
   app.get('/api/pools', handlePools(runs))
 

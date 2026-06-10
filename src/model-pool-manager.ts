@@ -1,0 +1,208 @@
+import type { Account, ServeStatus } from './auth-store.js'
+import type { RunLease, TokenPool } from './run-manager.js'
+import type { Config } from './types.js'
+import { UpstreamClient } from './upstream.js'
+
+// ─── Account Pool ──────────────────────────────────────────────
+// Wraps a TokenPool with model-group selection metadata.
+
+export interface AccountPool {
+  account: Account
+  pool: TokenPool
+}
+
+// ─── Model Pool Manager ────────────────────────────────────────
+// Manages per-model account groups. Each model maps to a list of
+// AccountPools. Selection prefers hot sessions (active, least inflight)
+// over idle accounts. Idle accounts trigger synchronous session creation
+// via pool.ensureSession() inside pool.acquire().
+
+export class ModelPoolManager {
+  private modelPools = new Map<string, AccountPool[]>()
+  private inflight = new Map<TokenPool, number>()
+  private lastUsedAt = new Map<TokenPool, number>()
+  private log: (...args: unknown[]) => void
+  private config: Config
+  private upstreamClient: UpstreamClient
+
+  constructor(
+    config: Config,
+    upstreamClient: UpstreamClient,
+    log: (...args: unknown[]) => void,
+  ) {
+    this.config = config
+    this.upstreamClient = upstreamClient
+    this.log = log
+  }
+
+  // ─── Pool Lifecycle ──────────────────────────────────────────
+
+  addPool(account: Account, pool: TokenPool): void {
+    const model = account.session_model
+    let pools = this.modelPools.get(model)
+    if (!pools) {
+      pools = []
+      this.modelPools.set(model, pools)
+    }
+    // Remove existing entry for same account id (replace)
+    const existing = pools.findIndex(p => p.account.id === account.id)
+    if (existing !== -1) {
+      pools.splice(existing, 1)
+    }
+    pools.push({ account, pool })
+    this.inflight.set(pool, 0)
+    this.log(`model-pool-manager: added pool ${account.id} for model ${model}`)
+  }
+
+  removePool(accountId: string): boolean {
+    for (const [model, pools] of this.modelPools) {
+      const idx = pools.findIndex(p => p.account.id === accountId)
+      if (idx !== -1) {
+        const removed = pools.splice(idx, 1)[0]
+        this.inflight.delete(removed.pool)
+        this.lastUsedAt.delete(removed.pool)
+        if (pools.length === 0) this.modelPools.delete(model)
+        this.log(`model-pool-manager: removed pool ${accountId} from model ${model}`)
+        return true
+      }
+    }
+    return false
+  }
+
+  getModels(): string[] {
+    return [...this.modelPools.keys()]
+  }
+
+  getPoolCount(): number {
+    let count = 0
+    for (const pools of this.modelPools.values()) count += pools.length
+    return count
+  }
+
+  // ─── Acquire ─────────────────────────────────────────────────
+  // Selects the best account for the model and acquires a run lease.
+  // Retries up to 3 times on the same account before moving to the next.
+  // Returns null if all accounts for the model are unavailable.
+
+  async acquire(model: string, agentId: string, requestedModel: string): Promise<RunLease | null> {
+    const pools = this.modelPools.get(model)
+    if (!pools?.length) {
+      this.log(`model-pool-manager: no pools for model ${model}`)
+      return null
+    }
+
+    const MAX_RETRIES_PER_ACCOUNT = 3
+    const ordered = this.selectOrder(pools)
+    const errors: string[] = []
+
+    for (const ap of ordered) {
+      for (let attempt = 0; attempt < MAX_RETRIES_PER_ACCOUNT; attempt++) {
+        try {
+          const lease = await ap.pool.acquire(agentId, requestedModel)
+          this.inflight.set(ap.pool, (this.inflight.get(ap.pool) ?? 0) + 1)
+          this.lastUsedAt.set(ap.pool, Date.now())
+          return lease
+        } catch (err) {
+          const msg = `${ap.account.id} (attempt ${attempt + 1}): ${err}`
+          this.log(`model-pool-manager: acquire failed — ${msg}`)
+          errors.push(msg)
+
+          // Cooldown → skip remaining retries on this account
+          if (ap.pool.isCoolingDown()) break
+
+          // Refresh session on session/run errors so next attempt gets a fresh one
+          if (ap.pool.session?.status === 'active' || ap.pool.session?.status === 'queued') {
+            ap.pool.invalidateSession(String(err))
+          }
+        }
+      }
+    }
+
+    this.log(`model-pool-manager: all pools exhausted for ${model} (${errors.join('; ')})`)
+    return null
+  }
+
+  // ─── Release / Invalidate / Cooldown ─────────────────────────
+
+  release(lease: RunLease): void {
+    const count = this.inflight.get(lease.pool) ?? 0
+    if (count > 0) this.inflight.set(lease.pool, count - 1)
+    lease.pool.release(lease.run)
+  }
+
+  invalidate(lease: RunLease, reason: string): void {
+    lease.pool.invalidate(lease.run, reason)
+  }
+
+  cooldown(lease: RunLease, durationMs: number, reason: string): void {
+    lease.pool.markCooldown(durationMs, reason)
+  }
+
+  // ─── Selection Algorithm ─────────────────────────────────────
+  // Returns AccountPools sorted by preference:
+  //   1. Healthy pools only (active serve_status, not on cooldown)
+  //   2. Hot (has active session) before idle (no session)
+  //   3. Among hot: least inflight, then least recently used
+
+  private selectOrder(pools: AccountPool[]): AccountPool[] {
+    const healthy = pools.filter(p => this.isHealthy(p))
+    if (healthy.length === 0) return []
+
+    const hot: AccountPool[] = []
+    const idle: AccountPool[] = []
+
+    for (const ap of healthy) {
+      const status = this.accountStatus(ap)
+      if (status === 'active') hot.push(ap)
+      else idle.push(ap)
+    }
+
+    hot.sort((a, b) => {
+      const aInflight = this.inflight.get(a.pool) ?? 0
+      const bInflight = this.inflight.get(b.pool) ?? 0
+      if (aInflight !== bInflight) return aInflight - bInflight
+      const aUsed = this.lastUsedAt.get(a.pool) ?? 0
+      const bUsed = this.lastUsedAt.get(b.pool) ?? 0
+      return aUsed - bUsed
+    })
+
+    return [...hot, ...idle]
+  }
+
+  private isHealthy(ap: AccountPool): boolean {
+    if (ap.account.serve_status !== 'active') return false
+    if (ap.pool.isCoolingDown()) return false
+    if (ap.account.paused) return false
+    return true
+  }
+
+  private accountStatus(ap: AccountPool): 'idle' | 'active' | 'queued' {
+    const s = ap.pool.session
+    if (!s) return 'idle'
+    if (s.status === 'active') return 'active'
+    if (s.status === 'queued') return 'queued'
+    return 'idle'
+  }
+
+  // ─── Maintenance ─────────────────────────────────────────────
+
+  async maintain(): Promise<void> {
+    for (const pools of this.modelPools.values()) {
+      for (const ap of pools) {
+        try {
+          await ap.pool.maintain()
+        } catch (err) {
+          this.log(`model-pool-manager: maintain ${ap.account.id} failed:`, err)
+        }
+      }
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    const promises: Promise<void>[] = []
+    for (const pools of this.modelPools.values()) {
+      for (const ap of pools) promises.push(ap.pool.shutdown())
+    }
+    await Promise.allSettled(promises)
+  }
+}

@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import type { RunManager } from '../run-manager.js'
+import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { AuthStore, Account } from '../auth-store.js'
 import type { Config } from '../types.js'
 import { resolveModelId } from '../types.js'
@@ -31,7 +32,7 @@ export function handleAccountsList(auth: AuthStore) {
   }
 }
 
-export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Config, client: UpstreamClient, log: (...args: unknown[]) => void) {
+export function handleAccountsAdd(auth: AuthStore, runs: RunManager, poolManager: ModelPoolManager, config: Config, client: UpstreamClient, log: (...args: unknown[]) => void) {
   return async (c: Context) => {
     let body: AddAccountBody
     try { body = await c.req.json<AddAccountBody>() } catch { return c.json({ error: 'invalid json' }, 400) }
@@ -57,6 +58,7 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Con
       auth.addAccount(account)
       const pool = new TokenPool(id, account.token, account.session_model, config, client, log, 'data/session-state.json', account.proxy_id)
       runs.addPool(pool)
+      poolManager.addPool(account, pool)
       return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } }, 201)
     }
 
@@ -70,7 +72,7 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, config: Con
   }
 }
 
-export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: Config, client: UpstreamClient, log: (...args: unknown[]) => void) {
+export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, poolManager: ModelPoolManager, config: Config, client: UpstreamClient, log: (...args: unknown[]) => void) {
   return async (c: Context) => {
     const flowId = c.req.param('flowId')
     if (!flowId) return c.json({ error: 'flowId is required' }, 400)
@@ -99,6 +101,7 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, config: 
       auth.addAccount(account)
       const pool = new TokenPool(id, account.token, account.session_model, config, client, log, 'data/session-state.json', account.proxy_id)
       runs.addPool(pool)
+      poolManager.addPool(account, pool)
       removeAuthFlow(flowId)
 
       return c.json({
@@ -178,7 +181,7 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager) {
   }
 }
 
-export function handleAccountsDelete(auth: AuthStore, runs: RunManager) {
+export function handleAccountsDelete(auth: AuthStore, runs: RunManager, poolManager: ModelPoolManager) {
   return async (c: Context) => {
     const id = c.req.param('id') ?? ''
     const account = auth.getAccount(id)
@@ -189,6 +192,7 @@ export function handleAccountsDelete(auth: AuthStore, runs: RunManager) {
     const pool = runs.getPoolByName(id)
     if (pool) await pool.shutdown().catch(() => {})
     runs.removePool(id)
+    poolManager.removePool(id)
     auth.removeAccount(id)
     return c.json({ ok: true })
   }

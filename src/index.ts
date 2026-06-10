@@ -3,6 +3,7 @@ import { loadConfig } from './config.js'
 import { UpstreamClient } from './upstream.js'
 import { ModelRegistry } from './model-registry.js'
 import { RunManager, TokenPool } from './run-manager.js'
+import { ModelPoolManager } from './model-pool-manager.js'
 import { AuthStore } from './auth-store.js'
 import { ProxyStore } from './proxy-store.js'
 import { DB } from './db.js'
@@ -55,8 +56,9 @@ export async function createServer(): Promise<FreebuffProxy> {
   }
 
   const runs = new RunManager(cfg, client, log)
+  const poolManager = new ModelPoolManager(cfg, client, log)
 
-  // Load accounts from auth.json into RunManager
+  // Load accounts from auth.json into RunManager and ModelPoolManager
   const accountTokens = auth.getAccountTokens()
   for (const acct of accountTokens) {
     const pool = new TokenPool(
@@ -70,6 +72,9 @@ export async function createServer(): Promise<FreebuffProxy> {
       acct.proxy_id,
     )
     runs.addPool(pool)
+
+    const fullAcct = auth.getAccount(acct.id)
+    if (fullAcct) poolManager.addPool(fullAcct, pool)
   }
 
   // Start HTTP server immediately
@@ -79,7 +84,7 @@ export async function createServer(): Promise<FreebuffProxy> {
     db.cleanExpiredSessions()
   }, 6 * 3600_000)
 
-  const app = createHonoApp(cfg, registry, runs, auth, db, client, proxyStore)
+  const app = createHonoApp(cfg, registry, runs, poolManager, auth, db, client, proxyStore)
 
   const port = parsePort(cfg.listenAddr)
   const server = serve({
