@@ -42,6 +42,18 @@ export type SessionStatus =
   | 'superseded'
   | 'model_locked'
 
+export interface SessionRateLimit {
+  model: string
+  limit: number
+  period: 'pacific_day'
+  resetTimeZone: string
+  resetAt: string
+  windowHours: number
+  recentCount: number
+}
+
+export type RateLimitsByModel = Record<string, SessionRateLimit>
+
 export interface FreeSessionResponse {
   status: string
   instanceId: string
@@ -58,6 +70,8 @@ export interface FreeSessionResponse {
   queueDepthByModel: Record<string, number>
   admittedAt: string
   queuedAt: string
+  rateLimit?: SessionRateLimit
+  rateLimitsByModel?: RateLimitsByModel
 }
 
 export interface CachedSession {
@@ -102,6 +116,10 @@ export interface TokenSnapshot {
   cooldownUntil: string | null
   lastError: string
   paused: boolean
+  sessionCount: number
+  rateLimit: SessionRateLimit | null
+  rateLimitsByModel: RateLimitsByModel | null
+  quotaResetAt: string | null
 }
 
 export interface RunSnapshot {

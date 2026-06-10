@@ -31,6 +31,9 @@ function makePool(overrides: Partial<TokenPool> = {}): TokenPool {
     session: null,
     cooldownUntil: null,
     lastError: '',
+    rateLimit: null,
+    rateLimitsByModel: null,
+    quotaResetAt: null,
     acquire: vi.fn(),
     release: vi.fn(),
     invalidate: vi.fn(),
@@ -342,6 +345,68 @@ describe('ModelPoolManager', () => {
 
       await mgr.acquire('model-a', 'agent-1', 'model-a')
       expect((mgr as any).inflight.get(pool)).toBe(0)
+    })
+  })
+
+  describe('quota-exhausted accounts', () => {
+    it('skips quota-paused accounts', async () => {
+      const quotaPaused = makePool({ isPaused: vi.fn(() => true) })
+      const okPool = makePool({ session: { status: 'active', instanceId: 'i1', model: 'model-a', expiresAt: null, admittedAt: null, remainingMs: 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 } })
+
+      const acct1 = makeAccount('a1', 'model-a')
+      const acct2 = makeAccount('a2', 'model-a')
+
+      mgr.addPool(acct1, quotaPaused)
+      mgr.addPool(acct2, okPool)
+
+      const lease = makeLease(okPool)
+      vi.mocked(okPool.acquire).mockResolvedValue(lease)
+
+      const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
+      expect(result).toBe(lease)
+      expect(quotaPaused.acquire).not.toHaveBeenCalled()
+      expect(okPool.acquire).toHaveBeenCalled()
+    })
+
+    it('returns null when all accounts are quota-paused', async () => {
+      const pool1 = makePool({ isPaused: vi.fn(() => true) })
+      const pool2 = makePool({ isPaused: vi.fn(() => true) })
+
+      const acct1 = makeAccount('a1', 'model-a')
+      const acct2 = makeAccount('a2', 'model-a')
+
+      mgr.addPool(acct1, pool1)
+      mgr.addPool(acct2, pool2)
+
+      const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
+      expect(result).toBeNull()
+    })
+  })
+
+  describe('getAccountRateInfo', () => {
+    it('returns rate limit info for all pools', () => {
+      const pool1 = makePool({
+        rateLimit: { model: 'model-a', limit: 100, period: 'pacific_day', resetTimeZone: 'US/Pacific', resetAt: '2026-06-11T00:00:00Z', windowHours: 24, recentCount: 50 },
+        rateLimitsByModel: { 'model-a': { model: 'model-a', limit: 100, period: 'pacific_day', resetTimeZone: 'US/Pacific', resetAt: '2026-06-11T00:00:00Z', windowHours: 24, recentCount: 50 } },
+        quotaResetAt: null,
+      })
+      const acct1 = makeAccount('a1', 'model-a')
+      mgr.addPool(acct1, pool1)
+
+      const info = mgr.getAccountRateInfo()
+      expect(info).toHaveLength(1)
+      expect(info[0].accountId).toBe('a1')
+      expect(info[0].rateLimit?.recentCount).toBe(50)
+      expect(info[0].rateLimitsByModel?.['model-a']?.limit).toBe(100)
+    })
+
+    it('returns null quotaResetAt when no quota exhaustion', () => {
+      const pool1 = makePool({ quotaResetAt: null })
+      const acct1 = makeAccount('a1', 'model-a')
+      mgr.addPool(acct1, pool1)
+
+      const info = mgr.getAccountRateInfo()
+      expect(info[0].quotaResetAt).toBeNull()
     })
   })
 })

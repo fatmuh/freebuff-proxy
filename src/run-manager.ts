@@ -1,4 +1,4 @@
-import type { Config, CachedSession, ManagedRun, TokenSnapshot, RunSnapshot } from './types.js'
+import type { Config, CachedSession, ManagedRun, TokenSnapshot, RunSnapshot, SessionRateLimit, RateLimitsByModel } from './types.js'
 import { UpstreamClient } from './upstream.js'
 import { sleep } from './utils.js'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -53,6 +53,13 @@ export class TokenPool {
   private _restoredState = false
   private _paused = false
   _switching = false
+
+  // Usage tracking
+  sessionCount = 0
+  rateLimit: SessionRateLimit | null = null
+  rateLimitsByModel: RateLimitsByModel | null = null
+  quotaResetAt: Date | null = null
+  private quotaResetTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
     name: string,
@@ -124,6 +131,13 @@ export class TokenPool {
 
   setPaused(paused: boolean): void {
     this._paused = paused
+    if (paused) {
+      // Manual pause — don't clear quota state (auto-unpause still works)
+    } else {
+      // Manual unpausing — clear auto-pause state so quota timer doesn't re-pause
+      if (this.quotaResetTimer) { clearTimeout(this.quotaResetTimer); this.quotaResetTimer = null }
+      this.quotaResetAt = null
+    }
   }
 
   // ─── Idle Timer ──────────────────────────────────────────────
@@ -194,6 +208,7 @@ export class TokenPool {
           position: 0, queueDepth: 0, estimatedWaitMs: 0,
         }
         this.lastError = ''
+        this.captureUsageData(state)
         this.log(`${this.name}: ✅ restored session ${saved.instanceId} (expires ${expiresAt?.toISOString() ?? 'unknown'})`)
         this.watchSessionExpiry(saved.instanceId, expiresAt)
         this.persistSessionState()  // refresh saved timestamp
@@ -298,6 +313,57 @@ export class TokenPool {
     if (reason) this.lastError = reason
   }
 
+  clearCooldown(): void {
+    this.cooldownUntil = null
+  }
+
+  // ─── Usage Tracking ──────────────────────────────────────────
+
+  /** Extract rate limit data from a session response and store it on the pool. */
+  captureUsageData(resp: { rateLimit?: SessionRateLimit; rateLimitsByModel?: RateLimitsByModel }): void {
+    if (resp.rateLimit) this.rateLimit = resp.rateLimit
+    if (resp.rateLimitsByModel) this.rateLimitsByModel = resp.rateLimitsByModel
+    this.checkQuotaExhaustion()
+  }
+
+  /** Check if the bound model's quota is exhausted. Auto-pause if so. */
+  private checkQuotaExhaustion(): void {
+    if (!this.rateLimitsByModel) return
+    const limit = this.rateLimitsByModel[this.sessionModel]
+    if (!limit) return // unlimited model — never auto-pause
+
+    if (limit.recentCount >= limit.limit) {
+      this._paused = true
+      const resetAt = limit.resetAt ? new Date(limit.resetAt) : null
+      if (resetAt && resetAt.getTime() > Date.now()) {
+        this.quotaResetAt = resetAt
+        this.scheduleQuotaReset(resetAt)
+        this.log(`${this.name}: quota exhausted (${limit.recentCount}/${limit.limit}), auto-pausing until ${resetAt.toISOString()}`)
+      } else {
+        this.log(`${this.name}: quota exhausted (${limit.recentCount}/${limit.limit}), auto-pausing (no reset time)`)
+      }
+    }
+  }
+
+  /** Schedule a one-shot timer to auto-unpause at resetAt. */
+  private scheduleQuotaReset(resetAt: Date): void {
+    if (this.quotaResetTimer) clearTimeout(this.quotaResetTimer)
+    const delay = resetAt.getTime() - Date.now()
+    if (delay <= 0) {
+      this.unpauseFromQuota()
+      return
+    }
+    this.quotaResetTimer = setTimeout(() => this.unpauseFromQuota(), delay)
+  }
+
+  /** Auto-unpause from quota exhaustion. Does NOT override manual pause. */
+  private unpauseFromQuota(): void {
+    this.quotaResetTimer = null
+    this.quotaResetAt = null
+    this._paused = false
+    this.log(`${this.name}: quota reset — auto-unpausing`)
+  }
+
   snapshot(): TokenSnapshot {
     const runs: RunSnapshot[] = []
     for (const run of this._runs.values()) {
@@ -326,6 +392,10 @@ export class TokenPool {
       cooldownUntil: this.cooldownUntil?.toISOString() ?? null,
       lastError: this.lastError,
       paused: this._paused,
+      sessionCount: this.sessionCount,
+      rateLimit: this.rateLimit,
+      rateLimitsByModel: this.rateLimitsByModel,
+      quotaResetAt: this.quotaResetAt?.toISOString() ?? null,
     }
   }
 
@@ -349,6 +419,7 @@ export class TokenPool {
 
   async shutdown(): Promise<void> {
     this.clearIdleTimer()
+    if (this.quotaResetTimer) { clearTimeout(this.quotaResetTimer); this.quotaResetTimer = null }
     // DON'T finish runs or end session on shutdown.
     // Runs expire on their own at codebuff's backend.
     // Sessions expire after ~1hr naturally.
@@ -381,6 +452,8 @@ export class TokenPool {
           position: 0, queueDepth: 0, estimatedWaitMs: 0,
         }
         this.lastError = ''
+        this.sessionCount++
+        this.captureUsageData(result)
         this.watchSessionExpiry(result.instanceId, result.expiresAt)
         this.persistSessionState()  // save to disk for restart reuse
         this.resetIdleTimer()
@@ -393,6 +466,7 @@ export class TokenPool {
           position: result.position,
           queueDepth: result.queueDepth, estimatedWaitMs: result.estimatedWaitMs,
         }
+        this.captureUsageData(result)
         this.backgroundPollSession(model, result.instanceId)
         return null
       }
@@ -411,6 +485,8 @@ export class TokenPool {
     status: string; instanceId: string; expiresAt: Date | null
     admittedAt: string | null; remainingMs: number
     position: number; queueDepth: number; estimatedWaitMs: number
+    rateLimit?: SessionRateLimit
+    rateLimitsByModel?: RateLimitsByModel
   }> {
     let lockedRetries = 0
     let state = await this.upstreamClient.createSession(this.token, model, this.proxyId)
@@ -436,7 +512,7 @@ export class TokenPool {
           const id = state.instanceId?.trim() ?? ''
           if (!id) throw new Error('session active but missing instanceId')
           const exp = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
-          return { status: 'active', instanceId: id, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
+          return { status: 'active', instanceId: id, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0, rateLimit: state.rateLimit, rateLimitsByModel: state.rateLimitsByModel }
         }
 
         case 'queued': {
@@ -448,6 +524,7 @@ export class TokenPool {
             position: state.position ?? 0, queueDepth: state.queueDepth ?? 0,
             estimatedWaitMs: state.estimatedWaitMs ?? 0,
           }
+          this.captureUsageData(state)
           const delay = smartPollDelay(state.estimatedWaitMs ?? 0)
           this.log(`${this.name}: queued (pos ${state.position}/${state.queueDepth}), polling in ${delay}ms`)
           await sleep(delay)
@@ -478,6 +555,8 @@ export class TokenPool {
             const exp = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
             this.session = { status: 'active', instanceId, model, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
             this.lastError = ''
+            this.sessionCount++
+            this.captureUsageData(state)
             this.log(`${this.name}: bg poll → active!`)
             this.watchSessionExpiry(instanceId, exp)
             this.persistSessionState()  // save to disk

@@ -173,6 +173,7 @@ export class ModelPoolManager {
     if (ap.account.serve_status !== 'active') return false
     if (ap.pool.isCoolingDown()) return false
     if (ap.account.paused) return false
+    if (ap.pool.isPaused()) return false  // quota-exhausted auto-pause
     return true
   }
 
@@ -182,6 +183,36 @@ export class ModelPoolManager {
     if (s.status === 'active') return 'active'
     if (s.status === 'queued') return 'queued'
     return 'idle'
+  }
+
+  // ─── Rate Limit Info (for dashboard) ──────────────────────────
+
+  getAccountRateInfo(): Array<{
+    accountId: string
+    model: string
+    rateLimit: import('./types.js').SessionRateLimit | null
+    rateLimitsByModel: import('./types.js').RateLimitsByModel | null
+    quotaResetAt: string | null
+  }> {
+    const result: Array<{
+      accountId: string
+      model: string
+      rateLimit: import('./types.js').SessionRateLimit | null
+      rateLimitsByModel: import('./types.js').RateLimitsByModel | null
+      quotaResetAt: string | null
+    }> = []
+    for (const pools of this.modelPools.values()) {
+      for (const ap of pools) {
+        result.push({
+          accountId: ap.account.id,
+          model: ap.pool.sessionModel,
+          rateLimit: ap.pool.rateLimit,
+          rateLimitsByModel: ap.pool.rateLimitsByModel,
+          quotaResetAt: ap.pool.quotaResetAt?.toISOString() ?? null,
+        })
+      }
+    }
+    return result
   }
 
   // ─── Maintenance ─────────────────────────────────────────────
