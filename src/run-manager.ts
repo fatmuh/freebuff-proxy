@@ -52,6 +52,7 @@ export class TokenPool {
   lastError = ''
   private _restoredState = false
   private _paused = false
+  private _autoPaused = false
   _switching = false
 
   // Usage tracking
@@ -126,7 +127,11 @@ export class TokenPool {
   }
 
   isPaused(): boolean {
-    return this._paused
+    return this._paused || this._autoPaused
+  }
+
+  isAutoPaused(): boolean {
+    return this._autoPaused
   }
 
   setPaused(paused: boolean): void {
@@ -135,6 +140,7 @@ export class TokenPool {
       // Manual pause — don't clear quota state (auto-unpause still works)
     } else {
       // Manual unpausing — clear auto-pause state so quota timer doesn't re-pause
+      this._autoPaused = false
       if (this.quotaResetTimer) { clearTimeout(this.quotaResetTimer); this.quotaResetTimer = null }
       this.quotaResetAt = null
     }
@@ -333,7 +339,7 @@ export class TokenPool {
     if (!limit) return // unlimited model — never auto-pause
 
     if (limit.recentCount >= limit.limit) {
-      this._paused = true
+      this._autoPaused = true
       const resetAt = limit.resetAt ? new Date(limit.resetAt) : null
       if (resetAt && resetAt.getTime() > Date.now()) {
         this.quotaResetAt = resetAt
@@ -360,7 +366,7 @@ export class TokenPool {
   private unpauseFromQuota(): void {
     this.quotaResetTimer = null
     this.quotaResetAt = null
-    this._paused = false
+    this._autoPaused = false
     this.log(`${this.name}: quota reset — auto-unpausing`)
   }
 
@@ -392,6 +398,7 @@ export class TokenPool {
       cooldownUntil: this.cooldownUntil?.toISOString() ?? null,
       lastError: this.lastError,
       paused: this._paused,
+      autoPaused: this._autoPaused,
       sessionCount: this.sessionCount,
       rateLimit: this.rateLimit,
       rateLimitsByModel: this.rateLimitsByModel,

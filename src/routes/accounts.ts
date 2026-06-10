@@ -165,7 +165,10 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager, poolMana
           void pool.prewarmSession()
         }
       }
-      return c.json({ ok: true, account: { ...account, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } })
+      // Reflect actual pause state: manual OR auto-paused
+      const pool = runs.getPoolByName(id)
+      const effectivePaused = account.paused || (pool?.isAutoPaused() ?? false)
+      return c.json({ ok: true, account: { ...account, paused: effectivePaused, token: maskToken(account.token), auth_token: maskToken(account.auth_token) } })
     }
 
     if (body.session_model !== undefined && resolveModelId(body.session_model) !== account.session_model) {

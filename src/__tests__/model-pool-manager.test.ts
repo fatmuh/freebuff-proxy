@@ -40,6 +40,7 @@ function makePool(overrides: Partial<TokenPool> = {}): TokenPool {
     markCooldown: vi.fn(),
     isCoolingDown: vi.fn(() => false),
     isPaused: vi.fn(() => false),
+    isAutoPaused: vi.fn(() => false),
     hasReadySession: vi.fn(() => false),
     ensureSession: vi.fn(),
     signalSuccess: vi.fn(),

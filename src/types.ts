@@ -116,6 +116,7 @@ export interface TokenSnapshot {
   cooldownUntil: string | null
   lastError: string
   paused: boolean
+  autoPaused: boolean
   sessionCount: number
   rateLimit: SessionRateLimit | null
   rateLimitsByModel: RateLimitsByModel | null
