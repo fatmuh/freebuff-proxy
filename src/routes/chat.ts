@@ -1,16 +1,17 @@
 import type { Context } from 'hono'
 import { Readable, Transform } from 'node:stream'
 import type { Dispatcher } from 'undici'
-import type { RunManager } from '../run-manager.js'
+import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
-import { openAIError, isSessionInvalid, isRunInvalid, extractUpstreamError, generateClientSessionId } from '../utils.js'
-import { PRIMARY_MODELS, DEFAULT_PRIMARY_MODEL, resolveModelId } from '../types.js'
+import { BUFFY_SYSTEM_PROMPT } from '../system-prompt.js'
+import { openAIError, isSessionInvalid, isRunInvalid, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
+import { resolveModelId } from '../types.js'
 
 export function handleChatCompletions(
   registry: ModelRegistry,
-  runs: RunManager,
+  poolManager: ModelPoolManager,
   db: DB,
   getApiKeyId: (apiKey: string) => string | null,
 ) {
@@ -37,18 +38,15 @@ export function handleChatCompletions(
     }
 
     const apiKey = c.get('apiKey') as string | undefined
-    const primaryModel = PRIMARY_MODELS.has(requestedModel) ? requestedModel : DEFAULT_PRIMARY_MODEL
     const isStream = payload.stream === true
 
     const startTime = Date.now()
-    console.log(`[chat] incoming: model=${requestedModel} agentId=${agentId} primary=${primaryModel}`)
+    console.log(`[chat] incoming: model=${requestedModel} agentId=${agentId}`)
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      let lease
-      try {
-        lease = await runs.acquire(primaryModel, agentId, requestedModel)
-      } catch (err) {
-        console.log(`[chat] acquire failed: attempt=${attempt} err=${err}`)
+      const lease = await poolManager.acquire(requestedModel, agentId, requestedModel)
+      if (!lease) {
+        console.log(`[chat] no pools available for model=${requestedModel}`)
         const latency = Date.now() - startTime
         const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
         db.insertRequestLog({
@@ -59,23 +57,24 @@ export function handleChatCompletions(
           model: requestedModel,
           agent_id: agentId,
           run_id: null,
-          status_code: 502,
+          status_code: 503,
           tokens_in: null,
           tokens_out: null,
           latency_ms: latency,
-          error: String(err),
+          error: `no healthy account for model ${requestedModel}`,
           is_stream: isStream ? 1 : 0,
         })
-        return openAIError(502, 'no healthy upstream auth token available', 'server_error')
+        return openAIError(503, `all accounts for model "${requestedModel}" are unavailable`, 'server_error')
       }
 
-      console.log(`[${lease.pool.name}] routing request (model: ${requestedModel}) via run: ${lease.run.id}`)
+      console.log(`[${lease.pool.name}] routing request (poolModel: ${lease.pool.sessionModel}) via run: ${lease.run.id}`)
 
       const upstreamBody = injectUpstreamMetadata(
         payload,
         requestedModel,
         lease.run.id,
         lease.pool.currentSessionInstanceId(),
+        lease.pool.sessionModel,
       )
 
       let statusCode: number
@@ -91,9 +90,8 @@ export function handleChatCompletions(
         headers = resp.headers as Record<string, string | string[] | undefined>
         body = resp.body
       } catch (err) {
-        // Network error (socket closed, timeout, etc) — retry once like session/run invalid
         console.log(`[${lease.pool.name}] upstream network error: ${err}`)
-        runs.release(lease)
+        poolManager.release(lease)
         if (attempt === 0) continue
         return openAIError(502, `upstream network error: ${err}`, 'server_error')
       }
@@ -101,7 +99,12 @@ export function handleChatCompletions(
       if (statusCode >= 200 && statusCode < 300) {
         const responseHeaders = new Headers()
         for (const [key, value] of Object.entries(headers)) {
-          if (key.toLowerCase() === 'content-length') continue
+          const lower = key.toLowerCase()
+          if (lower === 'content-length') continue
+          if (lower === 'content-encoding') continue
+          if (lower === 'transfer-encoding') continue
+          if (lower === 'connection') continue
+          if (lower === 'keep-alive') continue
           if (value !== undefined) {
             if (Array.isArray(value)) {
               for (const v of value) responseHeaders.append(key, v)
@@ -112,17 +115,15 @@ export function handleChatCompletions(
         }
 
         lease.pool.signalSuccess()
-        runs.release(lease)
+        poolManager.release(lease)
         const latency = Date.now() - startTime
         console.log(`[${lease.pool.name}] request completed in ${latency}ms (status: ${statusCode})`)
 
         const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
 
         if (isStream) {
-          // Stream: intercept SSE chunks to extract usage from the chunk before [DONE]
           const { transformedStream, tokensIn, tokensOut, donePromise } = interceptStreamForUsage(body)
 
-          // Insert log after stream ends (so we have token counts)
           void donePromise.then(() => {
             db.insertRequestLog({
               created_at: new Date(startTime).toISOString(),
@@ -144,7 +145,6 @@ export function handleChatCompletions(
           const webStream = Readable.toWeb(transformedStream) as ReadableStream<Uint8Array>
           return new Response(webStream, { status: statusCode, headers: responseHeaders })
         } else {
-          // Non-stream: buffer body, parse usage, then forward
           let bodyBuffer: ArrayBuffer
           try {
             bodyBuffer = await body.arrayBuffer()
@@ -182,29 +182,35 @@ export function handleChatCompletions(
         }
       }
 
-      const errorBody = await body.text()
+      const errorBody = sanitizeBodyText(await readDecompressedBody(body, headers))
       const latency = Date.now() - startTime
+
+      if (statusCode === 403) {
+        console.log(`${lease.pool.name}: upstream 403, failing over to next account`)
+        poolManager.release(lease)
+        if (attempt === 0) continue
+      }
 
       if (isSessionInvalid(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: session invalid, refreshing and retrying`)
         lease.pool.invalidateSession(errorBody.trim())
-        runs.release(lease)
+        poolManager.release(lease)
         continue
       }
 
       if (isRunInvalid(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: run ${lease.run.id} invalid, rotating and retrying`)
-        runs.invalidate(lease, errorBody.trim())
-        runs.release(lease)
+        poolManager.invalidate(lease, errorBody.trim())
+        poolManager.release(lease)
         continue
       }
 
       if (statusCode === 401) {
-        runs.cooldown(lease, 30 * 60_000, 'upstream auth rejected token')
+        poolManager.cooldown(lease, 30 * 60_000, 'upstream auth rejected token')
         lease.pool.invalidateSession('upstream auth rejected token')
       }
 
-      runs.release(lease)
+      poolManager.release(lease)
       console.log(`[${lease.pool.name}] upstream error: ${statusCode} ${errorBody.trim()}`)
 
       const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
@@ -253,14 +259,23 @@ export function handleChatCompletions(
   }
 }
 
-function injectUpstreamMetadata(
+export function injectUpstreamMetadata(
   payload: Record<string, unknown>,
   requestedModel: string,
   runId: string,
   sessionInstanceId: string,
+  poolModel: string,
 ): string {
   const cloned = JSON.parse(JSON.stringify(payload))
-  cloned.model = requestedModel
+  cloned.model = poolModel
+  normalizeImageContentParts(cloned)
+
+  // Inject the CLI "Buffy" system prompt so Codebuff API doesn't reject with "only allowed in cli"
+  const messages = Array.isArray(cloned.messages)
+    ? (cloned.messages as Array<Record<string, unknown>>)
+    : []
+  messages.unshift({ role: 'system', content: BUFFY_SYSTEM_PROMPT })
+  cloned.messages = messages
 
   if (Array.isArray(cloned.tools)) {
     normalizeToolSchemas(cloned.tools)
@@ -276,6 +291,61 @@ function injectUpstreamMetadata(
   cloned.codebuff_metadata = metadata
 
   return JSON.stringify(cloned)
+}
+
+function normalizeImageContentParts(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) return
+
+  for (const message of payload.messages) {
+    if (!isRecord(message) || !Array.isArray(message.content)) continue
+    message.content = message.content.map(normalizeContentPart)
+  }
+}
+
+function normalizeContentPart(part: unknown): unknown {
+  if (!isRecord(part)) return part
+
+  if (part.type === 'image_url') {
+    const url = extractImageUrl(part.image_url)
+    return url ? { ...part, image_url: { url } } : part
+  }
+
+  if (part.type === 'input_image') {
+    const url = extractImageUrl(part.image_url ?? part.image)
+    return url ? { ...part, type: 'image_url', image_url: { url } } : part
+  }
+
+  if (part.type === 'image') {
+    const url = extractImageUrl(part.image)
+    if (!url) return part
+    return {
+      ...part,
+      type: 'image_url',
+      image_url: { url: toDataUrl(url, part.mediaType) },
+    }
+  }
+
+  return part
+}
+
+function extractImageUrl(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (isRecord(value) && typeof value.url === 'string' && value.url.trim()) {
+    return value.url.trim()
+  }
+  return null
+}
+
+function toDataUrl(value: string, mediaType: unknown): string {
+  if (/^(data:|https?:)/i.test(value)) return value
+  const mime = typeof mediaType === 'string' && mediaType.trim()
+    ? mediaType.trim()
+    : 'image/png'
+  return `data:${mime};base64,${value}`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function interceptStreamForUsage(body: unknown) {
@@ -324,10 +394,8 @@ function interceptStreamForUsage(body: unknown) {
     },
   })
 
-  // body from undici is an async iterable
   const nodeStream = Readable.from(body as unknown as AsyncIterable<Uint8Array>)
 
-  // Prevent unhandled 'error' events (e.g. socket closed mid-stream) from crashing the process
   nodeStream.on('error', (err) => {
     console.log('[stream] upstream body error:', err)
     transform.destroy(err)

@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import { gunzipSync, inflateSync, brotliDecompressSync } from 'node:zlib'
+import type { Dispatcher } from 'undici'
 
 // ─── ID Generators ─────────────────────────────────────────────
 
@@ -17,6 +19,8 @@ export function generateClientSessionId(): string {
 export function generateUserAgent(): string {
   return 'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.20 runtime/browser'
 }
+
+export const BUN_USER_AGENT = 'Bun/1.3.11'
 
 // ─── Sleep ─────────────────────────────────────────────────────
 
@@ -132,4 +136,73 @@ export function cloneArray(input: unknown[]): unknown[] {
 export function maskToken(token: string): string {
   if (token.length <= 8) return '****'
   return token.slice(0, 4) + '...' + token.slice(-4)
+}
+
+// ─── Upstream Body Decompression ─────────────────────────────────
+// undici auto-decompresses 2xx responses, but error bodies (4xx/5xx)
+// may arrive as raw compressed bytes if Content-Encoding is set.
+// These functions manually decompress so we can read the real error text.
+
+/** Decompress a Buffer based on Content-Encoding header value. */
+export function decompressBody(raw: Buffer, contentEncoding: string | undefined): Buffer {
+  if (!contentEncoding) return raw
+  const enc = contentEncoding.trim().toLowerCase()
+  if (enc === 'gzip' || enc === 'x-gzip') {
+    return gunzipSync(raw)
+  } else if (enc === 'deflate' || enc === 'x-deflate') {
+    return inflateSync(raw)
+  } else if (enc === 'br') {
+    return brotliDecompressSync(raw)
+  }
+  // unknown encoding — return as-is
+  return raw
+}
+
+/**
+ * Read an undici response body as decompressed text.
+ * Handles Content-Encoding: gzip, deflate, br automatically.
+ */
+export async function readDecompressedBody(
+  body: Dispatcher.ResponseData['body'],
+  headers: Record<string, string | string[] | undefined>,
+): Promise<string> {
+  const contentEncoding = typeof headers['content-encoding'] === 'string'
+    ? headers['content-encoding']
+    : Array.isArray(headers['content-encoding'])
+      ? headers['content-encoding'][0]
+      : undefined
+
+  const raw = Buffer.from(await body.arrayBuffer())
+  const decompressed = decompressBody(raw, contentEncoding)
+  return decompressed.toString('utf-8')
+}
+
+// ─── Binary / Garbled Body Detection ────────────────────────────
+// If undici can't decompress the response (e.g. unsupported encoding),
+// body.text() returns raw compressed bytes decoded as Latin-1/UTF-8.
+// Real API error responses are >95% ASCII — a high proportion of high-byte
+// chars (0x80+) and especially U+FFFD (replacement char) means garbage.
+
+const BINARY_THRESHOLD = 0.15  // >15% high-byte chars → treat as binary
+
+export function sanitizeBodyText(raw: string): string {
+  if (!raw) return raw
+  let suspicious = 0
+  const len = raw.length
+  for (let i = 0; i < len; i++) {
+    const c = raw.charCodeAt(i)
+    // Control chars (exclude common whitespace)
+    if (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) { suspicious++; continue }
+    // DEL
+    if (c === 0x7f) { suspicious++; continue }
+    // U+FFFD replacement character — strongest signal of binary-as-text decoding
+    if (c === 0xfffd) { suspicious++; continue }
+    // ANY high-byte char (0x80+) — real API errors are overwhelmingly ASCII.
+    // Latin-1 extended chars / garbled UTF-8 sequences land here.
+    if (c >= 0x80) { suspicious++; continue }
+  }
+  if (suspicious / len > BINARY_THRESHOLD) {
+    return `(binary body, ${raw.length} bytes — content-encoding mismatch)`
+  }
+  return raw
 }
