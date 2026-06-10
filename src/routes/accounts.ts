@@ -130,7 +130,7 @@ export function handleAuthFlowCancel() {
   }
 }
 
-export function handleAccountsUpdate(auth: AuthStore, runs: RunManager) {
+export function handleAccountsUpdate(auth: AuthStore, runs: RunManager, poolManager: ModelPoolManager) {
   return async (c: Context) => {
     const id = c.req.param('id') ?? ''
     let body: UpdateAccountBody
@@ -171,6 +171,12 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager) {
     if (body.session_model !== undefined && resolveModelId(body.session_model) !== account.session_model) {
       account.session_model = resolveModelId(body.session_model)
       auth.updateAccount(account)
+      // Update poolManager mapping: remove from old model group, re-add under new model
+      const pool = runs.getPoolByName(id)
+      if (pool) {
+        poolManager.removePool(id)
+        poolManager.addPool(account, pool)
+      }
       void runs.switchModel(id, account.session_model).catch(err => {
         console.error(`[accounts] switchModel failed:`, err)
       })

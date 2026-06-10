@@ -76,7 +76,7 @@ export function createHonoApp(
   app.post('/api/accounts', handleAccountsAdd(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.get('/api/accounts/flows/:flowId/status', handleAuthFlowStatus(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.post('/api/accounts/flows/:flowId/cancel', handleAuthFlowCancel())
-  app.patch('/api/accounts/:id', handleAccountsUpdate(auth, runs))
+  app.patch('/api/accounts/:id', handleAccountsUpdate(auth, runs, poolManager))
   app.delete('/api/accounts/:id', handleAccountsDelete(auth, runs, poolManager))
 
   app.get('/api/pools', handlePools(runs))
