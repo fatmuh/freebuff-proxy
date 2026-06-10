@@ -8,13 +8,13 @@ import type { AuthStore } from './auth-store.js'
 import type { DB } from './db.js'
 import type { UpstreamClient } from './upstream.js'
 import type { ProxyStore } from './proxy-store.js'
-import { handleModels } from './routes/models.js'
+import { handleModelsList, handleModels } from './routes/models.js'
 import { handleChatCompletions } from './routes/chat.js'
 import { handleResponses } from './routes/responses.js'
 import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly, handleUsageAnalytics } from './routes/usage.js'
 import { handleRequestsList, handleRequestsPurge } from './routes/requests.js'
 import { handleAuthCheck, handleAuthLogin, handleAuthLogout, dashboardAuthMiddleware } from './routes/auth.js'
-import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus, handleAuthFlowCancel } from './routes/accounts.js'
+import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus, handleAuthFlowCancel, handleAccountUsage } from './routes/accounts.js'
 import { handleKeysList, handleKeysCreate, handleKeysDelete, handleKeysToggle, handleKeysUpdate } from './routes/keys.js'
 import { handleProxiesList, handleProxiesCreate, handleProxiesUpdate, handleProxiesDelete, handleProxiesTest } from './routes/proxies.js'
 import { openAIError, containsString } from './utils.js'
@@ -66,6 +66,7 @@ export function createHonoApp(
     return dashboardAuthMiddleware(db)(c, next)
   })
 
+  app.get('/api/models', handleModelsList(registry))
   app.get('/v1/models', handleModels(registry, startedAt))
   app.all('/v1/chat/completions', handleChatCompletions(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey)))
   app.post('/v1/responses', handleResponses(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey)))
@@ -78,6 +79,7 @@ export function createHonoApp(
   app.post('/api/accounts', handleAccountsAdd(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.get('/api/accounts/flows/:flowId/status', handleAuthFlowStatus(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.post('/api/accounts/flows/:flowId/cancel', handleAuthFlowCancel())
+  app.get('/api/accounts/usage', handleAccountUsage(auth, runs, poolManager, db))
   app.patch('/api/accounts/:id', handleAccountsUpdate(auth, runs, poolManager))
   app.delete('/api/accounts/:id', handleAccountsDelete(auth, runs, poolManager))
 
@@ -112,12 +114,22 @@ export function createHonoApp(
     const accounts = auth.listAccounts()
     const queued = snapshots.filter(p => p.sessionStatus === 'queued')
     const active = snapshots.filter(p => p.sessionStatus === 'active')
+
+    // Per-model active session counts from ModelPoolManager
+    const perModel: Record<string, number> = {}
+    for (const snap of snapshots) {
+      if (snap.sessionStatus === 'active') {
+        perModel[snap.sessionModel] = (perModel[snap.sessionModel] ?? 0) + 1
+      }
+    }
+
     return c.json({
       running: true,
       uptime_sec: Math.floor((Date.now() - startedAt.getTime()) / 1000),
       total_accounts: accounts.length,
       active_accounts: active.length,
       queued_accounts: queued.length,
+      active_by_model: perModel,
       queues: queued.map(q => ({
         name: q.name,
         model: q.sessionModel,

@@ -1,6 +1,13 @@
 import type { Context } from 'hono'
 import type { ModelRegistry } from '../model-registry.js'
 
+// GET /api/models — admin model list (raw model/agent IDs)
+export function handleModelsList(registry: ModelRegistry) {
+  return (c: Context) => {
+    return c.json({ models: registry.models() })
+  }
+}
+
 // GET /v1/models — OpenAI-compatible model list
 export function handleModels(registry: ModelRegistry, startedAt: Date) {
   return (c: Context) => {

@@ -14,6 +14,25 @@ interface Account {
   account_status: 'idle' | 'active' | 'queued'
 }
 
+interface AccountUsage {
+  id: string
+  name: string
+  email: string
+  session_model: string
+  paused: boolean
+  auto_paused: boolean
+  serve_status: 'active' | 'inactive'
+  account_status: string
+  session_instance_id: string
+  session_expires_at: string | null
+  session_remaining_ms: number
+  quota_reset_at: string | null
+  total_sessions: number
+  rate_limit: { model: string; limit: number; recentCount: number; resetAt: string } | null
+  rate_limits_by_model: Record<string, { model: string; limit: number; recentCount: number; resetAt: string }> | null
+  local_usage: { requests: number; tokens_in: number; tokens_out: number }
+}
+
 interface ProxyInfo {
   id: string
   name: string
@@ -40,6 +59,7 @@ interface Pool {
 
 export default function AccountsPanel() {
   const [accounts, setAccounts] = createSignal<Account[]>([])
+  const [usageData, setUsageData] = createSignal<AccountUsage[]>([])
   const [pools, setPools] = createSignal<Pool[]>([])
   const [proxyList, setProxyList] = createSignal<ProxyInfo[]>([])
   const [showAdd, setShowAdd] = createSignal(false)
@@ -75,15 +95,17 @@ export default function AccountsPanel() {
 
   const refresh = async () => {
     try {
-      const [acctData, poolData, proxyData] = await Promise.all([
+      const [acctData, poolData, proxyData, usageRes] = await Promise.all([
         apiGet<{ accounts: Account[] }>('/api/accounts'),
         apiGet<{ pools: Pool[] }>('/api/pools'),
         apiGet<{ proxies: ProxyInfo[] }>('/api/proxies'),
+        apiGet<{ accounts: AccountUsage[] }>('/api/accounts/usage'),
       ])
       if (isEditingFormControl()) return
       setProxyList(proxyData.proxies.map((p: any) => ({ id: p.id, name: p.name, type: p.type, url_safe: p.url_safe })))
       setAccounts(acctData.accounts)
       setPools(poolData.pools)
+      setUsageData(usageRes.accounts)
     } catch {}
   }
 
@@ -203,6 +225,14 @@ export default function AccountsPanel() {
   }
 
   const getPool = (id: string) => pools().find(p => p.name === id)
+  const getUsage = (id: string) => usageData().find(u => u.id === id)
+
+  const formatResetCountdown = (resetAt: string | null) => {
+    if (!resetAt) return null
+    const ms = new Date(resetAt).getTime() - Date.now()
+    if (ms <= 0) return 'now'
+    return formatDuration(ms)
+  }
 
   const prevStatus = new Map<string, string>()
   createEffect(() => {
@@ -357,7 +387,8 @@ export default function AccountsPanel() {
                     <th>PROXY</th>
                     <th>SERVE STATUS</th>
                     <th>SESSION STATUS</th>
-                    <th>QUEUE DETAIL</th>
+                    <th>QUOTA</th>
+                    <th>USAGE (30d)</th>
                     <th>ACTIONS</th>
                   </tr>
               </thead>
@@ -402,13 +433,24 @@ export default function AccountsPanel() {
                             {acct.account_status}
                           </span>
                         </td>
-                        <td>{statusBadge(pool())}</td>
                         <td class="mono">
-                          <Show when={pool()?.sessionStatus === 'queued'}>
-                            Position {pool()!.sessionPosition} of {pool()!.sessionQueueDepth}
-                            <Show when={pool()!.sessionEstWaitMs > 0}>
-                              <br />~{formatDuration(pool()!.sessionEstWaitMs)} wait
+                          <Show when={getUsage(acct.id)} fallback={<span class="text-muted">-</span>}>
+                            <Show when={getUsage(acct.id)!.rate_limit} fallback={<span class="text-muted">unlimited</span>}>
+                              <div>{getUsage(acct.id)!.rate_limit!.recentCount}/{getUsage(acct.id)!.rate_limit!.limit}</div>
+                              <Show when={getUsage(acct.id)!.quota_reset_at}>
+                                <div class="text-muted" style={{ 'font-size': '0.7rem' }}>
+                                  resets {formatResetCountdown(getUsage(acct.id)!.quota_reset_at)}
+                                </div>
+                              </Show>
                             </Show>
+                          </Show>
+                        </td>
+                        <td class="mono">
+                          <Show when={getUsage(acct.id)} fallback={<span class="text-muted">-</span>}>
+                            <div>{getUsage(acct.id)!.local_usage.requests} req</div>
+                            <div class="text-muted" style={{ 'font-size': '0.7rem' }}>
+                              {getUsage(acct.id)!.total_sessions} sessions
+                            </div>
                           </Show>
                         </td>
                         <td class="actions">

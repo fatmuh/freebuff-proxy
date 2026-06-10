@@ -42,6 +42,15 @@ interface RecentRequest {
   latency_ms: number | null
 }
 
+interface StatusData {
+  running: boolean
+  uptime_sec: number
+  total_accounts: number
+  active_accounts: number
+  queued_accounts: number
+  active_by_model: Record<string, number>
+}
+
 function formatCompactNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
@@ -51,18 +60,21 @@ function formatCompactNumber(n: number): string {
 export default function HomePage() {
   const [usage] = createResource(() => apiGet<UsageSummary>('/api/usage/summary'))
   const [pools, setPools] = createSignal<Pool[]>([])
+  const [status, setStatus] = createSignal<StatusData | null>(null)
   const [modelBreakdown] = createResource(() => apiGet<ModelUsage[]>('/api/usage/by-model?days=1'))
   const [hourlyData] = createResource(() => apiGet<HourlyUsage[]>('/api/usage/hourly'))
   const [recentRequests, setRecentRequests] = createSignal<RecentRequest[]>([])
 
   const poll = async () => {
     try {
-      const [poolsData, reqsData] = await Promise.all([
+      const [poolsData, reqsData, statusData] = await Promise.all([
         apiGet<{ pools: Pool[] }>('/api/pools'),
         apiGet<{ rows: RecentRequest[] }>('/api/requests?limit=5'),
+        apiGet<StatusData>('/api/status'),
       ])
       setPools(poolsData.pools)
       setRecentRequests(reqsData.rows)
+      setStatus(statusData)
     } catch {}
   }
 
@@ -158,6 +170,23 @@ export default function HomePage() {
           </div>
         </div>
       </div>
+
+      {/* ── Per-Model Active Sessions ── */}
+      <Show when={status()?.active_by_model && Object.keys(status()!.active_by_model).length > 0}>
+        <div class="card" title="Number of active sessions per model group">
+          <h2 class="card-title">ACTIVE SESSIONS BY MODEL</h2>
+          <div class="model-breakdown">
+            <For each={Object.entries(status()!.active_by_model)}>
+              {([model, count]) => (
+                <div class="model-badge">
+                  <span class="model-name">{model}</span>
+                  <span class="model-count mono">{count} active</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
 
       {/* ── Hourly Activity Chart ── */}
       <Show when={hourlyBarData()}>

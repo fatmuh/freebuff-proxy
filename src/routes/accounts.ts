@@ -3,6 +3,7 @@ import type { RunManager } from '../run-manager.js'
 import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { AuthStore, Account } from '../auth-store.js'
 import type { Config } from '../types.js'
+import type { DB } from '../db.js'
 import { resolveModelId } from '../types.js'
 import type { UpstreamClient } from '../upstream.js'
 import { TokenPool } from '../run-manager.js'
@@ -210,5 +211,53 @@ export function handleAccountsDelete(auth: AuthStore, runs: RunManager, poolMana
 export function handlePools(runs: RunManager) {
   return (c: Context) => {
     return c.json({ pools: runs.snapshots() })
+  }
+}
+
+export function handleAccountUsage(auth: AuthStore, runs: RunManager, poolManager: ModelPoolManager, db: DB) {
+  return (c: Context) => {
+    const pools = new Map(runs.snapshots().map(s => [s.name, s]))
+    const rateInfoMap = new Map(poolManager.getAccountRateInfo().map(r => [r.accountId, r]))
+    const dbUsageMap = new Map<string, { requests: number; tokens_in: number; tokens_out: number }>()
+
+    const dbUsage = db.getUsageByAccount(30) as { account_id: string | null; requests: number; tokens_in: number; tokens_out: number }[]
+    for (const row of dbUsage) {
+      if (row.account_id) {
+        dbUsageMap.set(row.account_id, {
+          requests: row.requests,
+          tokens_in: row.tokens_in,
+          tokens_out: row.tokens_out,
+        })
+      }
+    }
+
+    const accounts = auth.listAccountsFull()
+    const usage = accounts.map(acct => {
+      const snap = pools.get(acct.id)
+      const rateInfo = rateInfoMap.get(acct.id)
+      const dbRow = dbUsageMap.get(acct.id)
+      const pool = runs.getPoolByName(acct.id)
+      const effectivePaused = acct.paused || (pool?.isAutoPaused() ?? false)
+      return {
+        id: acct.id,
+        name: acct.name,
+        email: acct.email,
+        session_model: acct.session_model,
+        paused: effectivePaused,
+        auto_paused: pool?.isAutoPaused() ?? false,
+        serve_status: acct.serve_status,
+        account_status: snap?.sessionStatus ?? 'none',
+        session_instance_id: snap?.sessionInstanceId ?? '',
+        session_expires_at: snap?.sessionExpiresAt ?? null,
+        session_remaining_ms: snap?.sessionRemainingMs ?? 0,
+        quota_reset_at: rateInfo?.quotaResetAt ?? snap?.quotaResetAt ?? null,
+        total_sessions: snap?.sessionCount ?? 0,
+        rate_limit: rateInfo?.rateLimit ?? snap?.rateLimit ?? null,
+        rate_limits_by_model: rateInfo?.rateLimitsByModel ?? snap?.rateLimitsByModel ?? null,
+        local_usage: dbRow ?? { requests: 0, tokens_in: 0, tokens_out: 0 },
+      }
+    })
+
+    return c.json({ accounts: usage })
   }
 }
