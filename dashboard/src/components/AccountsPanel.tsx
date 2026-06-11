@@ -435,9 +435,14 @@ export default function AccountsPanel() {
                           </span>
                         </td>
                         <td>
-                          <span class={`badge ${acct.account_status === 'active' ? 'badge-active' : acct.account_status === 'queued' ? 'badge-queued' : 'badge-none'}`}>
-                            {acct.account_status}
-                          </span>
+                          <Show when={getUsage(acct.id)} fallback={<span class="badge badge-none">-</span>}>
+                            {usage => {
+                              const status = usage().account_status
+                              return <span class={`badge ${status === 'active' ? 'badge-active' : status === 'queued' ? 'badge-queued' : 'badge-none'}`}>
+                                {status}
+                              </span>
+                            }}
+                          </Show>
                         </td>
                         <td class="mono">
                           <Show when={getUsage(acct.id)} fallback={<span class="text-muted">-</span>}>

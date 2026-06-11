@@ -203,6 +203,14 @@ export class TokenPool {
       const state = await this.upstreamClient.getSession(this.token, saved.instanceId, this.proxyId)
 
       if (state.status.trim() === 'active') {
+        const sessionModel = state.model?.trim() ?? ''
+        if (sessionModel && sessionModel !== this.sessionModel) {
+          this.log(`${this.name}: saved session ${saved.instanceId} is for model ${sessionModel}, expected ${this.sessionModel} — ending it`)
+          // Kill the old session so upstream doesn't block us with model_locked
+          await this.upstreamClient.endSession(this.token, this.proxyId).catch(() => {})
+          return null
+        }
+
         const expiresAt = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
         this.session = {
           status: 'active',
@@ -325,10 +333,17 @@ export class TokenPool {
 
   // ─── Usage Tracking ──────────────────────────────────────────
 
-  /** Extract rate limit data from a session response and store it on the pool. */
+  /** Extract rate limit data from a session response and store it on the pool.
+   *  Derives rateLimit from rateLimitsByModel[sessionModel] so the dashboard
+   *  always shows the bound model's current quota even when the upstream
+   *  response only includes rateLimitsByModel. */
   captureUsageData(resp: { rateLimit?: SessionRateLimit; rateLimitsByModel?: RateLimitsByModel }): void {
+    if (resp.rateLimitsByModel) {
+      this.rateLimitsByModel = resp.rateLimitsByModel
+      const bound = resp.rateLimitsByModel[this.sessionModel]
+      if (bound) this.rateLimit = bound
+    }
     if (resp.rateLimit) this.rateLimit = resp.rateLimit
-    if (resp.rateLimitsByModel) this.rateLimitsByModel = resp.rateLimitsByModel
     this.checkQuotaExhaustion()
   }
 
@@ -453,6 +468,14 @@ export class TokenPool {
     try {
       const result = await this.refreshSession(model)
       if (result.status === 'active' && result.instanceId) {
+        // Upstream may bind to a different model than requested (e.g. free tier
+        // forces deepseek even though we asked for kimi). Kill it immediately.
+        if (result.sessionModel && result.sessionModel !== model) {
+          this.log(`${this.name}: upstream bound session to ${result.sessionModel}, expected ${model} — killing it`)
+          await this.upstreamClient.endSession(this.token, this.proxyId).catch(() => {})
+          throw new Error(`model mismatch: upstream bound ${result.sessionModel} but account is ${model}`)
+        }
+
         this.session = {
           status: 'active', instanceId: result.instanceId, model,
           expiresAt: result.expiresAt, admittedAt: result.admittedAt ?? null, remainingMs: result.remainingMs ?? 0,
@@ -490,6 +513,7 @@ export class TokenPool {
 
   private async refreshSession(model: string): Promise<{
     status: string; instanceId: string; expiresAt: Date | null
+    sessionModel?: string
     admittedAt: string | null; remainingMs: number
     position: number; queueDepth: number; estimatedWaitMs: number
     rateLimit?: SessionRateLimit
@@ -508,8 +532,10 @@ export class TokenPool {
           if (lockedRetries > MAX_MODEL_LOCKED_RETRIES) {
             throw new Error(`model_locked after ${lockedRetries} retries`)
           }
-          this.log(`${this.name}: model_locked, retrying (${lockedRetries}/${MAX_MODEL_LOCKED_RETRIES})`)
-          await this.endSessionNow().catch(() => {})
+          this.log(`${this.name}: model_locked, ending upstream session and retrying (${lockedRetries}/${MAX_MODEL_LOCKED_RETRIES})`)
+          // Send DELETE directly — endSessionNow() bails out because
+          // this.session is still null during session creation.
+          await this.upstreamClient.endSession(this.token, this.proxyId).catch(() => {})
           await sleep(2_000)
           state = await this.upstreamClient.createSession(this.token, model, this.proxyId)
           continue
@@ -519,7 +545,7 @@ export class TokenPool {
           const id = state.instanceId?.trim() ?? ''
           if (!id) throw new Error('session active but missing instanceId')
           const exp = state.expiresAt?.trim() ? new Date(state.expiresAt) : null
-          return { status: 'active', instanceId: id, expiresAt: exp, admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0, rateLimit: state.rateLimit, rateLimitsByModel: state.rateLimitsByModel }
+          return { status: 'active', instanceId: id, expiresAt: exp, sessionModel: state.model?.trim(), admittedAt: state.admittedAt ?? null, remainingMs: state.remainingMs ?? 0, position: 0, queueDepth: 0, estimatedWaitMs: 0, rateLimit: state.rateLimit, rateLimitsByModel: state.rateLimitsByModel }
         }
 
         case 'queued': {
@@ -608,10 +634,8 @@ export class TokenPool {
   private scheduleSessionRebuild(reason: string): void {
     if (this.sessionRebuildScheduled || this.isCoolingDown()) return
     this.sessionRebuildScheduled = true
-    this.log(`${this.name}: rebuilding session (${reason})`)
-    void (async () => {
-      try { await this.prewarmSession() } finally { this.sessionRebuildScheduled = false }
-    })()
+    this.log(`${this.name}: session invalidated (${reason}) — will create on next request`)
+    this.sessionRebuildScheduled = false
   }
 
   private hasInflightRequests(): boolean {
@@ -698,42 +722,15 @@ export class RunManager {
     pool._switching = true
     pool.sessionModel = newModel
 
-    this.log(`prewarming session for ${newModel}...`)
-    void pool.prewarmSession().then(async () => {
-      pool._switching = false
-      let warmed = 0
-      for (const agentId of this.agentIds) {
-        try {
-          await pool.acquire(agentId, 'prewarm')
-          const run = pool.getRun(agentId)
-          if (run) pool.release(run)
-          warmed++
-        } catch (err) {
-          this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
-        }
-      }
-      this.log(`${pool.name}: prewarm done (${warmed}/${this.agentIds.length} runs)`)
-    }).catch(() => { pool._switching = false })
+    // Session will be created on next request
+    pool._switching = false
+    this.log(`session for ${newModel} will be created on next request`)
   }
 
   async start(agentIds: string[]): Promise<void> {
     this.agentIds = agentIds
-    const prewarmPromises = this.pools.map(async pool => {
-      await pool.prewarmSession()
-      let warmed = 0
-      for (const agentId of agentIds) {
-        try {
-          await pool.acquire(agentId, 'prewarm')
-          const run = pool.getRun(agentId)
-          if (run) pool.release(run)
-          warmed++
-        } catch (err) {
-          this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
-        }
-      }
-      this.log(`${pool.name}: prewarm done (${warmed}/${agentIds.length} runs)`)
-    })
-    await Promise.allSettled(prewarmPromises)
+    // Session created on first request — no prewarm to avoid wasting
+    // premium session quota on idle sessions that never receive chat traffic.
 
     this.maintainTimer = setInterval(() => {
       for (const pool of this.pools) {
@@ -794,17 +791,6 @@ export class RunManager {
   addPool(pool: TokenPool): void {
     this.pools.push(pool)
     this.log(`run-manager: added pool ${pool.name} (model: ${pool.sessionModel})`)
-    void pool.prewarmSession().then(async () => {
-      for (const agentId of this.agentIds) {
-        try {
-          await pool.acquire(agentId, 'prewarm')
-          const run = pool.getRun(agentId)
-          if (run) pool.release(run)
-        } catch (err) {
-          this.log(`${pool.name}: prewarm ${agentId} failed:`, err)
-        }
-      }
-    })
   }
 
   removePool(name: string): void {
