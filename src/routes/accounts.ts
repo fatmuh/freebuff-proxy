@@ -225,11 +225,9 @@ export function handleRefreshQuota(auth: AuthStore, runs: RunManager) {
 
     try {
       const instanceId = pool.currentSessionInstanceId()
-      if (instanceId) {
-        const state = await pool.upstreamClient.getSession(pool.token, instanceId, pool.proxyId)
-        pool.captureUsageData(state)
-      }
-      return c.json({ ok: true, rateLimit: pool.rateLimit, rateLimitsByModel: pool.rateLimitsByModel, quotaResetAt: pool.quotaResetAt })
+      const state = await pool.upstreamClient.getSession(pool.token, instanceId, pool.proxyId)
+      pool.captureUsageData(state)
+      return c.json({ ok: true, rateLimit: pool.rateLimit, rateLimitsByModel: pool.rateLimitsByModel })
     } catch (err) {
       return c.json({ error: `refresh failed: ${err}` }, 500)
     }
@@ -272,7 +270,7 @@ export function handleAccountUsage(auth: AuthStore, runs: RunManager, poolManage
         session_instance_id: snap?.sessionInstanceId ?? '',
         session_expires_at: snap?.sessionExpiresAt ?? null,
         session_remaining_ms: snap?.sessionRemainingMs ?? 0,
-        quota_reset_at: rateInfo?.quotaResetAt ?? snap?.quotaResetAt ?? null,
+        quota_reset_at: rateInfo?.quotaResetAt ?? snap?.quotaResetAt ?? rateInfo?.rateLimit?.resetAt ?? snap?.rateLimit?.resetAt ?? null,
         total_sessions: snap?.sessionCount ?? 0,
         rate_limit: rateInfo?.rateLimit ?? snap?.rateLimit ?? null,
         rate_limits_by_model: rateInfo?.rateLimitsByModel ?? snap?.rateLimitsByModel ?? null,
