@@ -214,6 +214,28 @@ export function handlePools(runs: RunManager) {
   }
 }
 
+export function handleRefreshQuota(auth: AuthStore, runs: RunManager) {
+  return async (c: Context) => {
+    const id = c.req.param('id') ?? ''
+    const account = auth.getAccount(id)
+    if (!account) return c.json({ error: 'account not found' }, 404)
+
+    const pool = runs.getPoolByName(id)
+    if (!pool) return c.json({ error: 'pool not found' }, 404)
+
+    try {
+      const instanceId = pool.currentSessionInstanceId()
+      if (instanceId) {
+        const state = await pool.upstreamClient.getSession(pool.token, instanceId, pool.proxyId)
+        pool.captureUsageData(state)
+      }
+      return c.json({ ok: true, rateLimit: pool.rateLimit, rateLimitsByModel: pool.rateLimitsByModel, quotaResetAt: pool.quotaResetAt })
+    } catch (err) {
+      return c.json({ error: `refresh failed: ${err}` }, 500)
+    }
+  }
+}
+
 export function handleAccountUsage(auth: AuthStore, runs: RunManager, poolManager: ModelPoolManager, db: DB) {
   return (c: Context) => {
     const pools = new Map(runs.snapshots().map(s => [s.name, s]))

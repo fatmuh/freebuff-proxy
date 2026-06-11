@@ -14,7 +14,7 @@ import { handleResponses } from './routes/responses.js'
 import { handleUsageSummary, handleUsageDaily, handleUsageByModel, handleUsageByAccount, handleUsageByApiKey, handleUsageHourly, handleUsageAnalytics } from './routes/usage.js'
 import { handleRequestsList, handleRequestsPurge } from './routes/requests.js'
 import { handleAuthCheck, handleAuthLogin, handleAuthLogout, dashboardAuthMiddleware } from './routes/auth.js'
-import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus, handleAuthFlowCancel, handleAccountUsage } from './routes/accounts.js'
+import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAccountsDelete, handlePools, handleAuthFlowStatus, handleAuthFlowCancel, handleAccountUsage, handleRefreshQuota } from './routes/accounts.js'
 import { handleKeysList, handleKeysCreate, handleKeysDelete, handleKeysToggle, handleKeysUpdate } from './routes/keys.js'
 import { handleProxiesList, handleProxiesCreate, handleProxiesUpdate, handleProxiesDelete, handleProxiesTest } from './routes/proxies.js'
 import { openAIError, containsString } from './utils.js'
@@ -80,6 +80,7 @@ export function createHonoApp(
   app.get('/api/accounts/flows/:flowId/status', handleAuthFlowStatus(auth, runs, poolManager, cfg, upstreamClient, (...args: unknown[]) => console.log('[auth]', ...args)))
   app.post('/api/accounts/flows/:flowId/cancel', handleAuthFlowCancel())
   app.get('/api/accounts/usage', handleAccountUsage(auth, runs, poolManager, db))
+  app.post('/api/accounts/:id/refresh-quota', handleRefreshQuota(auth, runs))
   app.patch('/api/accounts/:id', handleAccountsUpdate(auth, runs, poolManager))
   app.delete('/api/accounts/:id', handleAccountsDelete(auth, runs, poolManager))
 

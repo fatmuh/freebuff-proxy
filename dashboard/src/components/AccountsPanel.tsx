@@ -203,6 +203,16 @@ export default function AccountsPanel() {
     refresh()
   }
 
+  const handleRefresh = async (id: string) => {
+    try {
+      await apiPost(`/api/accounts/${id}/refresh-quota`)
+      addToast('Quota refreshed', 'success')
+      refresh()
+    } catch (err) {
+      addToast('Refresh failed: ' + err, 'error')
+    }
+  }
+
   const handleDelete = async (id: string) => {
     setConfirmDelete(id)
   }
@@ -395,6 +405,7 @@ export default function AccountsPanel() {
                     <th>SERVE STATUS</th>
                     <th>SESSION STATUS</th>
                     <th>QUOTA</th>
+                    <th>RESET TIME</th>
                     <th>USAGE (30d)</th>
                     <th>ACTIONS</th>
                   </tr>
@@ -448,11 +459,16 @@ export default function AccountsPanel() {
                           <Show when={getUsage(acct.id)} fallback={<span class="text-muted">-</span>}>
                             <Show when={getUsage(acct.id)!.rate_limit} fallback={<span class="text-muted">unlimited</span>}>
                               <div>{getUsage(acct.id)!.rate_limit!.recentCount}/{getUsage(acct.id)!.rate_limit!.limit}</div>
-                              <Show when={getUsage(acct.id)!.quota_reset_at}>
-                                <div class="text-muted" style={{ 'font-size': '0.7rem' }}>
-                                  resets {formatResetCountdown(getUsage(acct.id)!.quota_reset_at)}
-                                </div>
-                              </Show>
+                            </Show>
+                          </Show>
+                        </td>
+                        <td class="mono">
+                          <Show when={getUsage(acct.id)} fallback={<span class="text-muted">-</span>}>
+                            <Show when={getUsage(acct.id)!.quota_reset_at} fallback={<span class="text-muted">-</span>}>
+                              <div>{getUsage(acct.id)!.quota_reset_at!.slice(0, 16).replace('T', ' ')}</div>
+                              <div class="text-muted" style={{ 'font-size': '0.7rem' }}>
+                                {formatResetCountdown(getUsage(acct.id)!.quota_reset_at)}
+                              </div>
                             </Show>
                           </Show>
                         </td>
@@ -465,6 +481,7 @@ export default function AccountsPanel() {
                           </Show>
                         </td>
                         <td class="actions">
+                          <button class="btn btn-sm" onClick={() => handleRefresh(acct.id)}>Refresh</button>
                           <Show when={!acct.paused} fallback={
                             <button class="btn btn-sm" onClick={() => handlePause(acct.id, false)}>Resume</button>
                           }>
