@@ -202,6 +202,10 @@ export class TokenPool {
       // Ask upstream: is this session still active?
       const state = await this.upstreamClient.getSession(this.token, saved.instanceId, this.proxyId)
 
+      // Capture quota data even when status is not active — upstream returns
+      // current rateLimitsByModel on every getSession call.
+      this.captureUsageData(state)
+
       if (state.status.trim() === 'active') {
         const sessionModel = state.model?.trim() ?? ''
         if (sessionModel && sessionModel !== this.sessionModel) {
