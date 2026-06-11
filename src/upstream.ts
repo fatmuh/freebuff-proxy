@@ -133,7 +133,6 @@ export class UpstreamClient {
         'accept': '*/*',
         'user-agent': this.userAgent,
         'connection': 'keep-alive',
-        'accept-encoding': 'gzip, deflate, br, zstd',
       },
       body,
     } as ReqOpts) as Promise<Dispatcher.ResponseData>

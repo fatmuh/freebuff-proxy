@@ -6,15 +6,21 @@ import { resolveModelId } from './types.js'
 // Used when remote fetch fails on startup (same as Go version)
 
 const HARDCODED_FALLBACK: Record<string, string[]> = {
-  'base2-free':         ['minimax/minimax-m2.7', 'z-ai/glm-5.1'],
-  'file-picker':        ['google/gemini-2.5-flash-lite'],
-  'file-picker-max':    ['google/gemini-3.1-flash-lite-preview'],
-  'file-lister':        ['google/gemini-3.1-flash-lite-preview'],
-  'researcher-web':     ['google/gemini-3.1-flash-lite-preview'],
-  'researcher-docs':    ['google/gemini-3.1-flash-lite-preview'],
-  'basher':             ['google/gemini-3.1-flash-lite-preview'],
-  'editor-lite':        ['minimax/minimax-m2.7', 'z-ai/glm-5.1'],
-  'code-reviewer-lite': ['minimax/minimax-m2.7', 'z-ai/glm-5.1'],
+  'base2-free':               ['minimax/minimax-m2.7'],
+  'base2-free-kimi':          ['moonshotai/kimi-k2.6'],
+  'base2-free-deepseek':      ['deepseek/deepseek-v4-pro'],
+  'base2-free-deepseek-flash':['deepseek/deepseek-v4-flash'],
+  'base2-free-minimax-m3':    ['minimax/minimax-m3'],
+  'base2-free-mimo':          ['mimo/mimo-v2.5'],
+  'base2-free-mimo-pro':      ['mimo/mimo-v2.5-pro'],
+  'file-picker':              ['google/gemini-2.5-flash-lite'],
+  'file-picker-max':          ['google/gemini-3.1-flash-lite-preview'],
+  'file-lister':              ['google/gemini-3.1-flash-lite-preview'],
+  'researcher-web':           ['google/gemini-3.1-flash-lite-preview'],
+  'researcher-docs':          ['google/gemini-3.1-flash-lite-preview'],
+  'basher':                   ['google/gemini-3.1-flash-lite-preview'],
+  'editor-lite':              ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash', 'moonshotai/kimi-k2.6', 'minimax/minimax-m2.7', 'minimax/minimax-m3', 'mimo/mimo-v2.5', 'mimo/mimo-v2.5-pro'],
+  'code-reviewer-lite':       ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash', 'moonshotai/kimi-k2.6', 'minimax/minimax-m2.7', 'minimax/minimax-m3', 'mimo/mimo-v2.5', 'mimo/mimo-v2.5-pro'],
 }
 
 const FREE_AGENTS_SOURCE_URL =
@@ -104,6 +110,9 @@ export class ModelRegistry {
       throw new Error('no free agents found in source')
     }
 
+    // Merge in models that exist upstream but aren't in free-agents.ts yet
+    injectExtraModels(parsed)
+
     const { modelToAgent, allModels } = buildModelMapping(parsed)
     this.agentModels = parsed
     this.modelToAgent = modelToAgent
@@ -124,34 +133,108 @@ export class ModelRegistry {
 // ─── Parsing ──────────────────────────────────────────────────
 // Extracts agent→models from the free-agents.ts TypeScript source
 
-function parseAllFreeModels(source: string): Record<string, string[]> {
-  const blockRe = /'([^']+)':\s*new\s+Set\(\[([^\]]*)\]\)/g
-  const modelRe = /'([^']+)'/g
+const KNOWN_MODEL_VARS: Record<string, string> = {
+  FREEBUFF_DEEPSEEK_V4_PRO_MODEL_ID: 'deepseek/deepseek-v4-pro',
+  FREEBUFF_DEEPSEEK_V4_FLASH_MODEL_ID: 'deepseek/deepseek-v4-flash',
+  FREEBUFF_GEMINI_PRO_MODEL_ID: 'google/gemini-3.1-pro-preview',
+  FREEBUFF_KIMI_MODEL_ID: 'moonshotai/kimi-k2.6',
+  FREEBUFF_MINIMAX_MODEL_ID: 'minimax/minimax-m2.7',
+  FREEBUFF_MINIMAX_M3_MODEL_ID: 'minimax/minimax-m3',
+  FREEBUFF_MIMO_V25_MODEL_ID: 'mimo/mimo-v2.5',
+  FREEBUFF_MIMO_V25_PRO_MODEL_ID: 'mimo/mimo-v2.5-pro',
+}
 
+const KNOWN_MODEL_SETS: Record<string, string[]> = {
+  FREEBUFF_ALLOWED_MODEL_IDS: [
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash',
+    'moonshotai/kimi-k2.6',
+    'minimax/minimax-m2.7',
+    'minimax/minimax-m3',
+    'mimo/mimo-v2.5',
+    'mimo/mimo-v2.5-pro',
+  ],
+}
+
+const FREEBUFF_ROOT_AGENT_BY_MODEL: Record<string, string> = {
+  'minimax/minimax-m2.7': 'base2-free',
+  'minimax/minimax-m3': 'base2-free-minimax-m3',
+  'moonshotai/kimi-k2.6': 'base2-free-kimi',
+  'deepseek/deepseek-v4-pro': 'base2-free-deepseek',
+  'deepseek/deepseek-v4-flash': 'base2-free-deepseek-flash',
+  'mimo/mimo-v2.5': 'base2-free-mimo',
+  'mimo/mimo-v2.5-pro': 'base2-free-mimo-pro',
+}
+
+/**
+ * Inject models from FREEBUFF_ROOT_AGENT_BY_MODEL that aren't already in the
+ * parsed agent→models map. This covers models that exist on Codebuff's
+ * upstream API but aren't listed in the open-source free-agents.ts yet.
+ */
+function injectExtraModels(parsed: Record<string, string[]>): void {
+  for (const [model, agentId] of Object.entries(FREEBUFF_ROOT_AGENT_BY_MODEL)) {
+    const alreadyPresent = Object.values(parsed).some(models => models.includes(model))
+    if (!alreadyPresent) {
+      if (!parsed[agentId]) parsed[agentId] = []
+      if (!parsed[agentId].includes(model)) {
+        parsed[agentId].push(model)
+      }
+    }
+  }
+}
+
+function parseAllFreeModels(source: string): Record<string, string[]> {
   const result: Record<string, string[]> = {}
+
+  // Pattern 1: new Set([...]) with literal array
+  const literalRe = /'([^']+)':\s*new\s+Set\(\[([^\]]*)\]\)/g
+  // Pattern 2: new Set(IDENTIFIER) - full reference to a variable
+  const refRe = /'([^']+)':\s*new\s+Set\((\w+)\)/g
+
   let blockMatch: RegExpExecArray | null
 
-  while ((blockMatch = blockRe.exec(source)) !== null) {
+  // Handle literal arrays
+  while ((blockMatch = literalRe.exec(source)) !== null) {
     const agentId = blockMatch[1]
     const modelsStr = blockMatch[2]
-
-    const models: string[] = []
-    let modelMatch: RegExpExecArray | null
-    modelRe.lastIndex = 0 // reset for each block
-
-    while ((modelMatch = modelRe.exec(modelsStr)) !== null) {
-      const model = modelMatch[1].trim()
-      if (model) models.push(model)
-    }
-
+    const models = extractModelsFromString(modelsStr)
     if (models.length > 0) result[agentId] = models
+  }
+
+  // Handle variable references (full set like FREEBUFF_ALLOWED_MODEL_IDS)
+  while ((blockMatch = refRe.exec(source)) !== null) {
+    const agentId = blockMatch[1]
+    const varName = blockMatch[2]
+    const models = KNOWN_MODEL_SETS[varName]
+    if (models) result[agentId] = models
   }
 
   return result
 }
 
-// Build model→agent reverse mapping. When a model appears in multiple
-// agents, one is chosen at random (same as Go version).
+function extractModelsFromString(str: string): string[] {
+  const models: string[] = []
+  const modelRe = /'([^']+)'/g
+  let match: RegExpExecArray | null
+
+  while ((match = modelRe.exec(str)) !== null) {
+    const model = match[1].trim()
+    if (model) models.push(model)
+  }
+
+  // Also resolve known variable references in arrays
+  for (const [varName, modelId] of Object.entries(KNOWN_MODEL_VARS)) {
+    if (str.includes(varName) && !models.includes(modelId)) {
+      models.push(modelId)
+    }
+  }
+
+  return models
+}
+
+// Build model→agent reverse mapping for direct client requests. Codebuff's
+// free gate requires these requests to use a root freebuff agent, not one of
+// the subagents that is also allowlisted for the same model.
 function buildModelMapping(
   agentModels: Record<string, string[]>,
 ): { modelToAgent: Record<string, string>; allModels: string[] } {
@@ -167,10 +250,16 @@ function buildModelMapping(
   const allModels: string[] = []
 
   for (const [model, agents] of Object.entries(modelAgents)) {
-    modelToAgent[model] = agents[Math.floor(Math.random() * agents.length)]
+    modelToAgent[model] = rootAgentForModel(model, agents) ?? agents[0]
     allModels.push(model)
   }
 
   allModels.sort()
   return { modelToAgent, allModels }
+}
+
+function rootAgentForModel(model: string, agents: string[]): string | undefined {
+  const preferred = FREEBUFF_ROOT_AGENT_BY_MODEL[model]
+  if (preferred && agents.includes(preferred)) return preferred
+  return agents.find(agent => agent.startsWith('base2-free'))
 }

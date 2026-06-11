@@ -4,16 +4,35 @@
 // whichever session is active — no special handling needed.
 
 export const PRIMARY_MODELS = new Set([
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash',
+  'moonshotai/kimi-k2.6',
   'minimax/minimax-m2.7',
-  'z-ai/glm-5.1',
+  'minimax/minimax-m3',
+  'mimo/mimo-v2.5',
+  'mimo/mimo-v2.5-pro',
 ])
 
-export const DEFAULT_PRIMARY_MODEL = 'minimax/minimax-m2.7'
+export const DEFAULT_PRIMARY_MODEL = 'deepseek/deepseek-v4-pro'
 
 // Short alias → full upstream model ID
 export const MODEL_ALIASES: Record<string, string> = {
+  'deepseek-v4-pro': 'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-pro': 'deepseek/deepseek-v4-pro',
+  'deepseek-v4-flash': 'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v4-flash': 'deepseek/deepseek-v4-flash',
+  'kimi-k2.6': 'moonshotai/kimi-k2.6',
+  'moonshotai/kimi-k2.6': 'moonshotai/kimi-k2.6',
   'minimax-m2.7': 'minimax/minimax-m2.7',
+  'minimax/minimax-m2.7': 'minimax/minimax-m2.7',
+  'minimax-m3': 'minimax/minimax-m3',
+  'minimax/minimax-m3': 'minimax/minimax-m3',
+  'mimo-v2.5': 'mimo/mimo-v2.5',
+  'mimo/mimo-v2.5': 'mimo/mimo-v2.5',
+  'mimo-v2.5-pro': 'mimo/mimo-v2.5-pro',
+  'mimo/mimo-v2.5-pro': 'mimo/mimo-v2.5-pro',
   'glm-5.1': 'z-ai/glm-5.1',
+  'z-ai/glm-5.1': 'z-ai/glm-5.1',
 }
 
 export function resolveModelId(model: string): string {

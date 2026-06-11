@@ -67,7 +67,7 @@ export default function AccountsPanel() {
   const [token, setToken] = createSignal('')
   const [name, setName] = createSignal('')
   const [email, setEmail] = createSignal('')
-  const [model, setModel] = createSignal('minimax-m2.7')
+  const [model, setModel] = createSignal('deepseek-v4-pro')
   const [addProxyId, setAddProxyId] = createSignal('')
   const [loading, setLoading] = createSignal(false)
   const [authFlowId, setAuthFlowId] = createSignal<string | null>(null)
@@ -77,7 +77,16 @@ export default function AccountsPanel() {
   const [errorMsg, setErrorMsg] = createSignal<string | null>(null)
   const [confirmDelete, setConfirmDelete] = createSignal<string | null>(null)
   const [toasts, setToasts] = createSignal<{ id: number; msg: string; type: string }[]>([])
+  const [availableModels, setAvailableModels] = createSignal<string[]>([])
   let toastId = 0
+
+  const loadModels = async () => {
+    try {
+      const data = await apiGet<{ models: string[] }>('/api/models')
+      setAvailableModels(data.models)
+    } catch {}
+  }
+  loadModels()
 
   const isEditingFormControl = () => {
     if (typeof document === 'undefined') return false
@@ -322,8 +331,7 @@ export default function AccountsPanel() {
               <div class="form-grid">
                 <input placeholder="Name (optional)" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
                 <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
-                  <option value="minimax-m2.7">minimax-m2.7</option>
-                  <option value="glm-5.1">glm-5.1</option>
+                  <For each={availableModels()}>{(m) => <option value={m}>{m}</option>}</For>
                 </select>
                 <select value={addProxyId()} onChange={(e) => setAddProxyId(e.currentTarget.value)}>
                   <option value="">No Proxy (Direct)</option>
@@ -344,8 +352,7 @@ export default function AccountsPanel() {
                 <input placeholder="Name" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
                 <input placeholder="Email" value={email()} onInput={(e) => setEmail(e.currentTarget.value)} />
                 <select value={model()} onChange={(e) => setModel(e.currentTarget.value)}>
-                  <option value="minimax-m2.7">minimax-m2.7</option>
-                  <option value="glm-5.1">glm-5.1</option>
+                  <For each={availableModels()}>{(m) => <option value={m}>{m}</option>}</For>
                 </select>
                 <select value={addProxyId()} onChange={(e) => setAddProxyId(e.currentTarget.value)}>
                   <option value="">No Proxy (Direct)</option>
@@ -406,8 +413,7 @@ export default function AccountsPanel() {
                             onChange={(e) => handleSwitchModel(acct.id, e.currentTarget.value)}
                             disabled={acct.paused}
                           >
-                            <option value="minimax/minimax-m2.7">minimax/minimax-m2.7</option>
-                            <option value="z-ai/glm-5.1">z-ai/glm-5.1</option>
+                            <For each={availableModels()}>{(m) => <option value={m}>{m}</option>}</For>
                           </select>
                         </td>
                         <td>
