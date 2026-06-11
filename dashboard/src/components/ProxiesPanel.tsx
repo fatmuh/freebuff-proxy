@@ -124,15 +124,20 @@ export default function ProxiesPanel() {
     setEditPass('')
   }
 
+  const closeEdit = () => setEditingId(null)
+
   const handleEdit = async () => {
     const id = editingId()
     if (!id) return
     const portNum = parseInt(editPort(), 10)
-    if (isNaN(portNum)) return
+    if (isNaN(portNum)) {
+      setErrorMsg('Port must be a number')
+      return
+    }
     try {
       const body: Record<string, unknown> = {
-        name: editName(),
-        host: editHost(),
+        name: editName().trim() || undefined,
+        host: editHost().trim(),
         port: portNum,
         username: editUser(),
       }
@@ -140,7 +145,9 @@ export default function ProxiesPanel() {
       await apiPatch(`/api/proxies/${id}`, body)
       setEditingId(null)
       refresh()
-    } catch {}
+    } catch (err) {
+      setErrorMsg('Failed to save: ' + err)
+    }
   }
 
   const typeBadge = (type: string) => {
@@ -215,15 +222,7 @@ export default function ProxiesPanel() {
                         <Show when={editingId() === proxy.id} fallback={
                           <span>{proxy.name}</span>
                         }>
-                          <div class="rename-row">
-                            <input value={editName()} onInput={(e) => setEditName(e.currentTarget.value)} />
-                            <input value={editHost()} onInput={(e) => setEditHost(e.currentTarget.value)} style="width:120px" />
-                            <input value={editPort()} onInput={(e) => setEditPort(e.currentTarget.value)} style="width:60px" />
-                            <input value={editUser()} onInput={(e) => setEditUser(e.currentTarget.value)} placeholder="user" style="width:80px" />
-                            <input value={editPass()} onInput={(e) => setEditPass(e.currentTarget.value)} type="password" placeholder="pass" style="width:80px" />
-                            <button class="btn btn-sm btn-primary" onClick={handleEdit}>Save</button>
-                            <button class="btn btn-sm" onClick={() => setEditingId(null)}>Cancel</button>
-                          </div>
+                          <span class="text-muted">editing...</span>
                         </Show>
                       </td>
                       <td>{typeBadge(proxy.type)}</td>
@@ -261,6 +260,55 @@ export default function ProxiesPanel() {
                 </For>
               </tbody>
             </table>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={editingId()}>
+        <div class="modal-backdrop" onClick={closeEdit}>
+          <div class="modal" onClick={(e) => e.stopPropagation()}>
+            <div class="modal-header">
+              <h2 class="card-title">EDIT PROXY</h2>
+              <button class="btn btn-sm" onClick={closeEdit}>x</button>
+            </div>
+            <div class="form-grid">
+              <label class="form-label">Name</label>
+              <input
+                autofocus
+                value={editName()}
+                onInput={(e) => setEditName(e.currentTarget.value)}
+                placeholder="Display name (optional)"
+              />
+              <label class="form-label">Host</label>
+              <input
+                value={editHost()}
+                onInput={(e) => setEditHost(e.currentTarget.value)}
+                placeholder="proxy.example.com"
+              />
+              <label class="form-label">Port</label>
+              <input
+                value={editPort()}
+                onInput={(e) => setEditPort(e.currentTarget.value)}
+                placeholder="1080"
+              />
+              <label class="form-label">Username</label>
+              <input
+                value={editUser()}
+                onInput={(e) => setEditUser(e.currentTarget.value)}
+                placeholder="optional"
+              />
+              <label class="form-label">Password</label>
+              <input
+                type="password"
+                value={editPass()}
+                onInput={(e) => setEditPass(e.currentTarget.value)}
+                placeholder="leave blank to keep"
+              />
+              <div class="modal-actions">
+                <button class="btn btn-primary" onClick={handleEdit}>Save</button>
+                <button class="btn" onClick={closeEdit}>Cancel</button>
+              </div>
+            </div>
           </div>
         </div>
       </Show>

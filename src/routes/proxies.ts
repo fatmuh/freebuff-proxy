@@ -105,7 +105,9 @@ export function handleProxiesUpdate(proxyStore: ProxyStore, upstreamClient: Upst
 
     const updated: ProxyEntry = {
       ...existing,
-      name: body.name ?? existing.name,
+      name: body.name !== undefined
+        ? (body.name.trim() || `${existing.type}://${body.host ?? existing.host}:${body.port ?? existing.port}`)
+        : existing.name,
       type: (body.type as ProxyEntry['type']) ?? existing.type,
       host: body.host ?? existing.host,
       port: body.port ?? existing.port,
