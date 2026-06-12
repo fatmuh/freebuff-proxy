@@ -348,25 +348,21 @@ export class TokenPool {
       if (bound) this.rateLimit = bound
     }
     if (resp.rateLimit) this.rateLimit = resp.rateLimit
-    this.checkQuotaExhaustion()
   }
 
-  /** Check if the bound model's quota is exhausted. Auto-pause if so. */
-  private checkQuotaExhaustion(): void {
+  /** Triggered when upstream returns a quota error. Auto-pause if so. */
+  triggerQuotaPause(): void {
     if (!this.rateLimitsByModel) return
     const limit = this.rateLimitsByModel[this.sessionModel]
-    if (!limit) return // unlimited model — never auto-pause
-
-    if (limit.recentCount >= limit.limit) {
-      this._autoPaused = true
-      const resetAt = limit.resetAt ? new Date(limit.resetAt) : null
-      if (resetAt && resetAt.getTime() > Date.now()) {
-        this.quotaResetAt = resetAt
-        this.scheduleQuotaReset(resetAt)
-        this.log(`${this.name}: quota exhausted (${limit.recentCount}/${limit.limit}), auto-pausing until ${resetAt.toISOString()}`)
-      } else {
-        this.log(`${this.name}: quota exhausted (${limit.recentCount}/${limit.limit}), auto-pausing (no reset time)`)
-      }
+    if (!limit) return
+    this._autoPaused = true
+    const resetAt = limit.resetAt ? new Date(limit.resetAt) : null
+    if (resetAt && resetAt.getTime() > Date.now()) {
+      this.quotaResetAt = resetAt
+      this.scheduleQuotaReset(resetAt)
+      this.log(`${this.name}: quota error from upstream (${limit.recentCount}/${limit.limit}), auto-pausing until ${resetAt.toISOString()}`)
+    } else {
+      this.log(`${this.name}: quota error from upstream (${limit.recentCount}/${limit.limit}), auto-pausing (no reset time)`)
     }
   }
 

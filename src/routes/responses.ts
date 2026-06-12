@@ -5,7 +5,7 @@ import type { Dispatcher } from 'undici'
 import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
-import { openAIError, isSessionInvalid, isRunInvalid, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
 import { resolveModelId } from '../types.js'
 import { convertResponsesToChat, buildResponseObject } from '../responses-converter.js'
 import { createResponsesTransform } from '../responses-stream.js'
@@ -230,6 +230,13 @@ export function handleResponses(
       // Error handling
       const errorBody = sanitizeBodyText(await readDecompressedBody(upstreamRespBody, headers))
       const latency = Date.now() - startTime
+
+      if (isQuotaError(statusCode, errorBody)) {
+        console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)
+        lease.pool.triggerQuotaPause()
+        poolManager.release(lease)
+        continue
+      }
 
       if (statusCode === 403) {
         console.log(`${lease.pool.name}: upstream 403, failing over to next account`)

@@ -94,6 +94,16 @@ export function isRunInvalid(statusCode: number, errorBody: string): boolean {
   return lower.includes('runid not found') || lower.includes('runid not running')
 }
 
+export function isQuotaError(statusCode: number, errorBody: string): boolean {
+  if (statusCode === 429) return true
+  if (statusCode === 403) {
+    const lower = errorBody.toLowerCase()
+    return lower.includes('quota') || lower.includes('exhaust') || lower.includes('limit') || lower.includes('rate')
+  }
+  const lower = errorBody.toLowerCase()
+  return lower.includes('quota exceeded') || lower.includes('insufficient_quota') || lower.includes('billing')
+}
+
 // ─── Upstream Error Extraction ─────────────────────────────────
 
 export interface UpstreamError {

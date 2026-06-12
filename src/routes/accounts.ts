@@ -227,8 +227,11 @@ export function handleRefreshQuota(auth: AuthStore, runs: RunManager) {
       const instanceId = pool.currentSessionInstanceId()
       const state = await pool.upstreamClient.getSession(pool.token, instanceId, pool.proxyId)
       pool.captureUsageData(state)
+      const rl = pool.rateLimit
+      console.log(`[refresh-quota] ${pool.name}: ${rl?.recentCount ?? '?'}/${rl?.limit ?? '?'} reset=${rl?.resetAt ?? 'none'}`)
       return c.json({ ok: true, rateLimit: pool.rateLimit, rateLimitsByModel: pool.rateLimitsByModel })
     } catch (err) {
+      console.log(`[refresh-quota] ${pool.name}: error — ${err}`)
       return c.json({ error: `refresh failed: ${err}` }, 500)
     }
   }

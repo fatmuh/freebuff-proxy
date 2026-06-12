@@ -6,7 +6,7 @@ import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { BUFFY_SYSTEM_PROMPT } from '../system-prompt.js'
-import { openAIError, isSessionInvalid, isRunInvalid, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
 import { resolveModelId } from '../types.js'
 
 export function handleChatCompletions(
@@ -184,6 +184,13 @@ export function handleChatCompletions(
 
       const errorBody = sanitizeBodyText(await readDecompressedBody(body, headers))
       const latency = Date.now() - startTime
+
+      if (isQuotaError(statusCode, errorBody)) {
+        console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)
+        lease.pool.triggerQuotaPause()
+        poolManager.release(lease)
+        continue
+      }
 
       if (statusCode === 403) {
         console.log(`${lease.pool.name}: upstream 403, failing over to next account`)
