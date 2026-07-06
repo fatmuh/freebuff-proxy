@@ -314,7 +314,40 @@ body {
 
 .data-table tr:hover { background: var(--hover-bg); }
 
-.error-cell { color: var(--accent-red); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.error-cell { color: var(--accent-red); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Expandable error dropdown in the Requests page */
+.error-toggle {
+  background: none;
+  border: none;
+  color: var(--accent-red);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.error-toggle:hover { text-decoration: underline; }
+
+.error-detail-row td {
+  background: var(--hover-bg);
+ padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+.error-detail-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--accent-red);
+  max-height: 280px;
+  overflow-y: auto;
+}
 
 .actions {
   white-space: nowrap;

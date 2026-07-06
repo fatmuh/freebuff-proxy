@@ -27,6 +27,8 @@ export default function RequestsPage() {
   const [fromDate, setFromDate] = createSignal('')
   const [toDate, setToDate] = createSignal('')
   const [autoRefresh, setAutoRefresh] = createSignal(true)
+  // Track which row IDs have their full error expanded (dropdown)
+  const [expandedErrors, setExpandedErrors] = createSignal<Set<number>>(new Set())
 
   const refresh = async () => {
     const params = new URLSearchParams()
@@ -63,6 +65,16 @@ export default function RequestsPage() {
     a.download = `requests-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  // Toggle dropdown expansion for a row's full error message
+  const toggleError = (id: number) => {
+    setExpandedErrors(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const totalPages = () => Math.ceil(total() / 50)
@@ -111,18 +123,44 @@ export default function RequestsPage() {
                 <tr><td colspan={8} class="text-muted">No requests found</td></tr>
               }>
                 <For each={rows()}>
-                  {(r) => (
-                    <tr>
-                      <td class="mono">{new Date(r.created_at).toLocaleString()}</td>
-                      <td>{r.model}</td>
-                      <td>{r.account_id ?? '-'}</td>
-                      <td class="mono">{r.status_code ?? '-'}</td>
-                      <td class="mono">{r.tokens_in?.toLocaleString() ?? '-'}</td>
-                      <td class="mono">{r.tokens_out?.toLocaleString() ?? '-'}</td>
-                      <td class="mono">{r.latency_ms ? r.latency_ms + 'ms' : '-'}</td>
-                      <td class="error-cell">{r.error ? r.error.slice(0, 60) : '-'}</td>
-                    </tr>
-                  )}
+                  {(r) => {
+                    const isExpanded = () => expandedErrors().has(r.id)
+                    const hasLongError = () => !!r.error && r.error.length > 60
+                    return (
+                      <>
+                        <tr>
+                          <td class="mono">{new Date(r.created_at).toLocaleString()}</td>
+                          <td>{r.model}</td>
+                          <td>{r.account_id ?? '-'}</td>
+                          <td class="mono">{r.status_code ?? '-'}</td>
+                          <td class="mono">{r.tokens_in?.toLocaleString() ?? '-'}</td>
+                          <td class="mono">{r.tokens_out?.toLocaleString() ?? '-'}</td>
+                          <td class="mono">{r.latency_ms ? r.latency_ms + 'ms' : '-'}</td>
+                          <td class="error-cell">
+                            <Show when={r.error} fallback="-">
+                              <Show when={hasLongError()} fallback={<span title={r.error ?? ''}>{r.error}</span>}>
+                                <button
+                                  type="button"
+                                  class="error-toggle"
+                                  onClick={() => toggleError(r.id)}
+                                  aria-expanded={isExpanded()}
+                                >
+                                  {isExpanded() ? '▾' : '▸'} {r.error!.slice(0, 60)}…
+                                </button>
+                              </Show>
+                            </Show>
+                          </td>
+                        </tr>
+                        <Show when={isExpanded() && r.error}>
+                          <tr class="error-detail-row">
+                            <td colspan={8}>
+                              <pre class="error-detail-pre">{r.error}</pre>
+                            </td>
+                          </tr>
+                        </Show>
+                      </>
+                    )
+                  }}
                 </For>
               </Show>
             </tbody>

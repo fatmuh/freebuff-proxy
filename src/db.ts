@@ -274,7 +274,9 @@ export class DB {
         break
       default: { // "all" — find earliest record, auto-pick bucket
         const earliest = this._getEarliestCreatedAt(apiKeyId)
-        startAt = earliest ? new Date(earliest + 'Z') : null
+        // earliest is an ISO-8601 string from SQLite (already ends in 'Z' if stored with 'Z').
+        // Only append 'Z' when the value lacks timezone info, otherwise new Date(...) throws.
+        startAt = earliest ? new Date(earliest.endsWith('Z') ? earliest : earliest + 'Z') : null
         const spanSec = startAt ? (now - startAt.getTime()) / 1000 : 0
         if (spanSec > 730 * 86400) bucketSeconds = 30 * 86400
         else if (spanSec > 180 * 86400) bucketSeconds = 7 * 86400

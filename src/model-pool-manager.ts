@@ -84,7 +84,7 @@ export class ModelPoolManager {
   // Retries up to 3 times on the same account before moving to the next.
   // Returns null if all accounts for the model are unavailable.
 
-  async acquire(model: string, agentId: string, requestedModel: string): Promise<RunLease | null> {
+  async acquire(model: string, agentId: string, requestedModel: string, excludePoolNames?: Set<string>): Promise<RunLease | null> {
     const pools = this.modelPools.get(model)
     if (!pools?.length) {
       this.log(`model-pool-manager: no pools for model ${model}`)
@@ -92,7 +92,11 @@ export class ModelPoolManager {
     }
 
     const MAX_RETRIES_PER_ACCOUNT = 3
-    const ordered = this.selectOrder(pools)
+    // Exclude pools that already failed for this request (switch account on retry)
+    const candidates = excludePoolNames && excludePoolNames.size > 0
+      ? this.selectOrder(pools).filter(ap => !excludePoolNames.has(ap.pool.name))
+      : this.selectOrder(pools)
+    const ordered = candidates
     const errors: string[] = []
 
     for (const ap of ordered) {

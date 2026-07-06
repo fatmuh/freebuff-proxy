@@ -53,8 +53,12 @@ export function handleResponses(
     const startTime = Date.now()
     console.log(`[responses] incoming: model=${requestedModel} agentId=${agentId}`)
 
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const lease = await poolManager.acquire(requestedModel, agentId, requestedModel)
+    // Pools that already failed for this request — skipped on retry so we switch accounts.
+    const failedPools = new Set<string>()
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const lease = await poolManager.acquire(requestedModel, agentId, requestedModel,
+        attempt === 0 ? undefined : failedPools)
       if (!lease) {
         console.log(`[responses] no pools available for model=${requestedModel}`)
         const latency = Date.now() - startTime
@@ -105,8 +109,9 @@ export function handleResponses(
         upstreamRespBody = resp.body
       } catch (err) {
         console.log(`[${lease.pool.name}] upstream network error: ${err}`)
+        failedPools.add(lease.pool.name)
         poolManager.release(lease)
-        if (attempt === 0) continue
+        if (attempt < 2) continue
         return openAIError(502, `upstream network error: ${err}`, 'server_error')
       }
 
@@ -234,19 +239,24 @@ export function handleResponses(
       if (isQuotaError(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)
         lease.pool.triggerQuotaPause()
+        failedPools.add(lease.pool.name)
         poolManager.release(lease)
         continue
       }
 
       if (statusCode === 403) {
         console.log(`${lease.pool.name}: upstream 403, failing over to next account`)
+        failedPools.add(lease.pool.name)
         poolManager.release(lease)
-        if (attempt === 0) continue
+        continue
       }
 
       if (isSessionInvalid(statusCode, errorBody)) {
-        console.log(`${lease.pool.name}: session invalid, refreshing and retrying`)
+        console.log(`${lease.pool.name}: session invalid — ending session and rebuilding fresh`)
         lease.pool.invalidateSession(errorBody.trim())
+        // Force-end the dead session on upstream so next acquire builds a brand-new one
+        await lease.pool.endSessionNow().catch((err: unknown) => console.log(`${lease.pool.name}: endSession error: ${err}`))
+        failedPools.add(lease.pool.name)
         poolManager.release(lease)
         continue
       }
@@ -254,6 +264,7 @@ export function handleResponses(
       if (isRunInvalid(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: run ${lease.run.id} invalid, rotating and retrying`)
         poolManager.invalidate(lease, errorBody.trim())
+        failedPools.add(lease.pool.name)
         poolManager.release(lease)
         continue
       }
@@ -305,9 +316,9 @@ export function handleResponses(
       tokens_in: null,
       tokens_out: null,
       latency_ms: latency,
-      error: 'upstream run expired twice in a row',
+      error: 'upstream run expired across all accounts',
       is_stream: isStream ? 1 : 0,
     })
-    return openAIError(502, 'upstream run expired twice in a row', 'server_error')
+    return openAIError(502, 'upstream run expired across all accounts', 'server_error')
   }
 }
