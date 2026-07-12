@@ -1,5 +1,6 @@
 import type { Config, CachedSession, ManagedRun, TokenSnapshot, RunSnapshot, SessionRateLimit, RateLimitsByModel } from './types.js'
 import { UpstreamClient } from './upstream.js'
+import type { AdsSpoof } from './ads-spoof.js'
 import { sleep } from './utils.js'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
@@ -61,6 +62,7 @@ export class TokenPool {
   rateLimitsByModel: RateLimitsByModel | null = null
   quotaResetAt: Date | null = null
   private quotaResetTimer: ReturnType<typeof setTimeout> | null = null
+  private adsSpoof: AdsSpoof | null = null
 
   constructor(
     name: string,
@@ -80,6 +82,10 @@ export class TokenPool {
     this.log = log
     this.stateFile = stateFile
     this.proxyId = proxyId
+  }
+
+  setAdsSpoof(ads: AdsSpoof | null): void {
+    this.adsSpoof = ads
   }
 
   // ─── Public: Session ──────────────────────────────────────────
@@ -487,6 +493,7 @@ export class TokenPool {
         this.watchSessionExpiry(result.instanceId, result.expiresAt)
         this.persistSessionState()  // save to disk for restart reuse
         this.resetIdleTimer()
+        this.adsSpoof?.maybeFire(this.name, this.token, this.proxyId || undefined)
         return result.instanceId
       }
       if (result.status === 'queued' && result.instanceId) {
@@ -697,12 +704,18 @@ export class RunManager {
   private maintainTimer: ReturnType<typeof setInterval> | null = null
   private agentIds: string[] = []
   private nextIdx = 0
+  private adsSpoof: AdsSpoof | null = null
 
   constructor(config: Config, upstreamClient: UpstreamClient, log: (...args: unknown[]) => void) {
     this.config = config
     this.upstreamClient = upstreamClient
     this.log = log
     this.pools = []
+  }
+
+  setAdsSpoof(ads: AdsSpoof | null): void {
+    this.adsSpoof = ads
+    for (const pool of this.pools) pool.setAdsSpoof(ads)
   }
 
   // ─── Switch Pool Model ────────────────────────────────────────
@@ -789,6 +802,7 @@ export class RunManager {
   }
 
   addPool(pool: TokenPool): void {
+    if (this.adsSpoof) pool.setAdsSpoof(this.adsSpoof)
     this.pools.push(pool)
     this.log(`run-manager: added pool ${pool.name} (model: ${pool.sessionModel})`)
   }

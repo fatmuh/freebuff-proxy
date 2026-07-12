@@ -9,6 +9,7 @@ import { ProxyStore } from './proxy-store.js'
 import { DB } from './db.js'
 import { createHonoApp } from './server.js'
 import { BUN_USER_AGENT } from './utils.js'
+import { AdsSpoof } from './ads-spoof.js'
 import { serve } from '@hono/node-server'
 
 export interface FreebuffProxy {
@@ -56,6 +57,8 @@ export async function createServer(): Promise<FreebuffProxy> {
 
   const runs = new RunManager(cfg, client, log)
   const poolManager = new ModelPoolManager(cfg, client, log)
+  const adsSpoof = new AdsSpoof(cfg.upstreamBaseURL, client, log)
+  runs.setAdsSpoof(adsSpoof)
 
   // Load accounts from auth.json into RunManager and ModelPoolManager
   const accountTokens = auth.getAccountTokens()

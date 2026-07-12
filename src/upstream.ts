@@ -1,6 +1,7 @@
 import { request, Agent, ProxyAgent, Socks5ProxyAgent, interceptors } from 'undici'
 import type { Dispatcher } from 'undici'
 import type { FreeSessionResponse } from './types.js'
+import { generateUserAgent } from './utils.js'
 import type { ProxyEntry } from './proxy-store.js'
 
 type ReqOpts = Parameters<typeof request>[1]
@@ -94,7 +95,7 @@ export class UpstreamClient {
   // ─── Run Management ──────────────────────────────────────────
 
   async startRun(authToken: string, agentId: string, proxyId?: string): Promise<string> {
-    const body = JSON.stringify({ action: 'START', agentId })
+    const body = JSON.stringify({ action: 'START', agentId, ancestorRunIds: [] })
     const { statusCode, body: respBody } = await this.doPost(authToken, '/api/v1/agent-runs', body, proxyId)
 
     const text = await respBody.text()
@@ -131,7 +132,7 @@ export class UpstreamClient {
         'authorization': `Bearer ${authToken}`,
         'content-type': 'application/json',
         'accept': '*/*',
-        'user-agent': this.userAgent,
+        'user-agent': generateUserAgent(),
         'connection': 'keep-alive',
       },
       body,
@@ -147,7 +148,7 @@ export class UpstreamClient {
       method: 'POST',
       headers: {
         'authorization': `Bearer ${authToken}`,
-        'accept': 'application/json',
+        'accept': '*/*',
         'user-agent': this.userAgent,
         'x-freebuff-model': model,
       },
@@ -162,7 +163,7 @@ export class UpstreamClient {
       method: 'GET',
       headers: {
         'authorization': `Bearer ${authToken}`,
-        'accept': 'application/json',
+        'accept': '*/*',
         'user-agent': this.userAgent,
         'x-freebuff-instance-id': instanceId,
       },
@@ -177,7 +178,7 @@ export class UpstreamClient {
       method: 'DELETE',
       headers: {
         'authorization': `Bearer ${authToken}`,
-        'accept': 'application/json',
+        'accept': '*/*',
         'user-agent': this.userAgent,
       },
     } as ReqOpts)
@@ -226,7 +227,7 @@ export class UpstreamClient {
       headers: {
         'authorization': `Bearer ${authToken}`,
         'content-type': 'application/json',
-        'accept': 'application/json',
+        'accept': '*/*',
         'user-agent': this.userAgent,
       },
       body,

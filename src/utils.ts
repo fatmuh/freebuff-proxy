@@ -20,7 +20,10 @@ export function generateUserAgent(): string {
   return 'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.20 runtime/browser'
 }
 
-export const BUN_USER_AGENT = 'Bun/1.3.11'
+export const BUN_USER_AGENT = 'Bun/1.3.14'
+
+/** Freebuff CLI ads endpoints use this UA (not Bun / ai-sdk). */
+export const FREEBUFF_CLI_USER_AGENT = 'Freebuff-CLI/0.0.122'
 
 // ─── Sleep ─────────────────────────────────────────────────────
 

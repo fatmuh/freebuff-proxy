@@ -303,6 +303,7 @@ export function injectUpstreamMetadata(
   metadata.run_id = runId
   metadata.cost_mode = 'free'
   metadata.client_id = generateClientSessionId()
+  metadata.trace_session_id = crypto.randomUUID()
   if (sessionInstanceId) {
     metadata.freebuff_instance_id = sessionInstanceId
   }
