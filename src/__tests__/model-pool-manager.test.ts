@@ -95,7 +95,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(pool2.acquire).mockResolvedValue(lease)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBe(lease)
+      expect(result.lease).toBe(lease)
       expect(pool2.acquire).toHaveBeenCalled()
       expect(pool1.acquire).not.toHaveBeenCalled()
     })
@@ -116,7 +116,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(hotPool.acquire).mockResolvedValue(lease)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBe(lease)
+      expect(result.lease).toBe(lease)
       expect(hotPool.acquire).toHaveBeenCalled()
       expect(idlePool.acquire).not.toHaveBeenCalled()
     })
@@ -134,14 +134,15 @@ describe('ModelPoolManager', () => {
       mgr.addPool(acct2, pool2)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBeNull()
+      expect(result.lease).toBeNull()
       expect(pool1.acquire).not.toHaveBeenCalled()
       expect(pool2.acquire).not.toHaveBeenCalled()
     })
 
     it('returns null when no pools exist for model', async () => {
       const result = await mgr.acquire('nonexistent', 'agent-1', 'nonexistent')
-      expect(result).toBeNull()
+      expect(result.lease).toBeNull()
+      expect(result.reason).toContain('no accounts configured')
     })
   })
 
@@ -160,7 +161,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(okPool.acquire).mockResolvedValue(lease)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBe(lease)
+      expect(result.lease).toBe(lease)
       expect(coolingPool.acquire).not.toHaveBeenCalled()
       expect(okPool.acquire).toHaveBeenCalled()
     })
@@ -181,7 +182,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(okPool.acquire).mockResolvedValue(lease)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBe(lease)
+      expect(result.lease).toBe(lease)
       expect(pausedPool.acquire).not.toHaveBeenCalled()
     })
   })
@@ -203,7 +204,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(okPool.acquire).mockResolvedValue(lease)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBe(lease)
+      expect(result.lease).toBe(lease)
       expect(failPool.acquire).toHaveBeenCalledTimes(3)
       expect(okPool.acquire).toHaveBeenCalledTimes(1)
     })
@@ -222,7 +223,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(pool2.acquire).mockRejectedValue(new Error('fail'))
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBeNull()
+      expect(result.lease).toBeNull()
       expect(pool1.acquire).toHaveBeenCalledTimes(3)
       expect(pool2.acquire).toHaveBeenCalledTimes(3)
     })
@@ -244,7 +245,7 @@ describe('ModelPoolManager', () => {
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
       // Should stop after 1 attempt (cooldown detected before retry 2)
       expect(pool.acquire).toHaveBeenCalledTimes(1)
-      expect(result).toBeNull()
+      expect(result.lease).toBeNull()
     })
   })
 
@@ -364,7 +365,7 @@ describe('ModelPoolManager', () => {
       vi.mocked(okPool.acquire).mockResolvedValue(lease)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBe(lease)
+      expect(result.lease).toBe(lease)
       expect(quotaPaused.acquire).not.toHaveBeenCalled()
       expect(okPool.acquire).toHaveBeenCalled()
     })
@@ -380,7 +381,7 @@ describe('ModelPoolManager', () => {
       mgr.addPool(acct2, pool2)
 
       const result = await mgr.acquire('model-a', 'agent-1', 'model-a')
-      expect(result).toBeNull()
+      expect(result.lease).toBeNull()
     })
   })
 

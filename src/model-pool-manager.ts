@@ -11,6 +11,13 @@ export interface AccountPool {
   pool: TokenPool
 }
 
+/** Result of ModelPoolManager.acquire — always includes a loggable reason on failure. */
+export interface AcquireResult {
+  lease: RunLease | null
+  /** Empty when lease is set; otherwise the real failure detail for request logs. */
+  reason: string
+}
+
 // ─── Model Pool Manager ────────────────────────────────────────
 // Manages per-model account groups. Each model maps to a list of
 // AccountPools. Selection prefers hot sessions (active, least inflight)
@@ -82,13 +89,19 @@ export class ModelPoolManager {
   // ─── Acquire ─────────────────────────────────────────────────
   // Selects the best account for the model and acquires a run lease.
   // Retries up to 3 times on the same account before moving to the next.
-  // Returns null if all accounts for the model are unavailable.
+  // On total failure, reason holds the real cause (not a generic placeholder).
 
-  async acquire(model: string, agentId: string, requestedModel: string, excludePoolNames?: Set<string>): Promise<RunLease | null> {
+  async acquire(
+    model: string,
+    agentId: string,
+    requestedModel: string,
+    excludePoolNames?: Set<string>,
+  ): Promise<AcquireResult> {
     const pools = this.modelPools.get(model)
     if (!pools?.length) {
-      this.log(`model-pool-manager: no pools for model ${model}`)
-      return null
+      const reason = `no accounts configured for model ${model}`
+      this.log(`model-pool-manager: ${reason}`)
+      return { lease: null, reason }
     }
 
     const MAX_RETRIES_PER_ACCOUNT = 3
@@ -99,15 +112,33 @@ export class ModelPoolManager {
     const ordered = candidates
     const errors: string[] = []
 
+    if (ordered.length === 0) {
+      const skipped = pools.map(ap => {
+        const bits: string[] = [ap.account.id]
+        if (ap.account.serve_status !== 'active') bits.push(`serve=${ap.account.serve_status}`)
+        if (ap.account.paused) bits.push('manual-paused')
+        if (ap.pool.isAutoPaused()) bits.push('auto-paused-quota')
+        if (ap.pool.isPaused() && !ap.account.paused && !ap.pool.isAutoPaused()) bits.push('paused')
+        if (ap.pool.isCoolingDown()) bits.push(`cooldown-until=${ap.pool.cooldownUntil?.toISOString() ?? '?'}`)
+        if (excludePoolNames?.has(ap.pool.name)) bits.push('excluded-this-request')
+        if (ap.pool.lastError) bits.push(`lastError=${ap.pool.lastError.slice(0, 200)}`)
+        return bits.join(' ')
+      })
+      const reason = `no healthy accounts for model ${model}: ${skipped.join(' | ') || 'none'}`
+      this.log(`model-pool-manager: ${reason}`)
+      return { lease: null, reason }
+    }
+
     for (const ap of ordered) {
       for (let attempt = 0; attempt < MAX_RETRIES_PER_ACCOUNT; attempt++) {
         try {
           const lease = await ap.pool.acquire(agentId, requestedModel)
           this.inflight.set(ap.pool, (this.inflight.get(ap.pool) ?? 0) + 1)
           this.lastUsedAt.set(ap.pool, Date.now())
-          return lease
+          return { lease, reason: '' }
         } catch (err) {
-          const msg = `${ap.account.id} (attempt ${attempt + 1}): ${err}`
+          const detail = err instanceof Error ? err.message : String(err)
+          const msg = `${ap.account.id} (attempt ${attempt + 1}): ${detail}`
           this.log(`model-pool-manager: acquire failed — ${msg}`)
           errors.push(msg)
 
@@ -116,14 +147,15 @@ export class ModelPoolManager {
 
           // Refresh session on session/run errors so next attempt gets a fresh one
           if (ap.pool.session?.status === 'active' || ap.pool.session?.status === 'queued') {
-            ap.pool.invalidateSession(String(err))
+            ap.pool.invalidateSession(detail)
           }
         }
       }
     }
 
-    this.log(`model-pool-manager: all pools exhausted for ${model} (${errors.join('; ')})`)
-    return null
+    const reason = `all pools exhausted for ${model}: ${errors.join('; ') || 'unknown'}`
+    this.log(`model-pool-manager: ${reason}`)
+    return { lease: null, reason }
   }
 
   // ─── Release / Invalidate / Cooldown ─────────────────────────

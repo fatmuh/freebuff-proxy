@@ -97,14 +97,21 @@ export function isRunInvalid(statusCode: number, errorBody: string): boolean {
   return lower.includes('runid not found') || lower.includes('runid not running')
 }
 
+/** Daily/premium quota exhaustion → auto-pause until resetAt. */
 export function isQuotaError(statusCode: number, errorBody: string): boolean {
-  if (statusCode === 429) return true
   if (statusCode === 403) {
     const lower = errorBody.toLowerCase()
     return lower.includes('quota') || lower.includes('exhaust') || lower.includes('limit') || lower.includes('rate')
   }
   const lower = errorBody.toLowerCase()
   return lower.includes('quota exceeded') || lower.includes('insufficient_quota') || lower.includes('billing')
+}
+
+/** Short-window free-mode rate limit (e.g. 1 req/sec) → rotate, don't day-pause. */
+export function isRateLimitError(statusCode: number, errorBody: string): boolean {
+  if (statusCode !== 429) return false
+  const lower = errorBody.toLowerCase()
+  return lower.includes('free_mode_rate_limited') || lower.includes('rate limit exceeded')
 }
 
 // ─── Upstream Error Extraction ─────────────────────────────────

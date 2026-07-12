@@ -6,7 +6,7 @@ import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { BUFFY_SYSTEM_PROMPT } from '../system-prompt.js'
-import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
 import { resolveModelId } from '../types.js'
 
 export function handleChatCompletions(
@@ -46,29 +46,47 @@ export function handleChatCompletions(
     // Pools that already failed for this request — skipped on retry so we switch accounts.
     const failedPools = new Set<string>()
 
+    // Last real upstream failure (status + body) — preferred for final log over proxy prose
+    let lastUpstreamStatus: number | null = null
+    let lastUpstreamError: string | null = null
+    let lastUpstreamAccount: string | null = null
+    let lastUpstreamRunId: string | null = null
+
     for (let attempt = 0; attempt < 3; attempt++) {
-      const lease = await poolManager.acquire(requestedModel, agentId, requestedModel,
-        attempt === 0 ? undefined : failedPools)
+      const { lease, reason: acquireReason } = await poolManager.acquire(
+        requestedModel,
+        agentId,
+        requestedModel,
+        attempt === 0 ? undefined : failedPools,
+      )
       if (!lease) {
-        console.log(`[chat] no pools available for model=${requestedModel}`)
+        console.log(`[chat] acquire failed model=${requestedModel}: ${acquireReason}`)
         const latency = Date.now() - startTime
         const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
+        // Prefer last Freebuff body from a prior attempt; else raw acquire reason (may embed upstream text)
+        const dbError = (lastUpstreamError ?? acquireReason).slice(0, 500)
+        const dbStatus = lastUpstreamStatus ?? 503
         db.insertRequestLog({
           created_at: new Date(startTime).toISOString(),
           api_key: apiKey ?? null,
           api_key_id: apiKeyId,
-          account_id: null,
+          account_id: lastUpstreamAccount,
           model: requestedModel,
           agent_id: agentId,
-          run_id: null,
-          status_code: 503,
+          run_id: lastUpstreamRunId,
+          status_code: dbStatus,
           tokens_in: null,
           tokens_out: null,
           latency_ms: latency,
-          error: `no healthy account for model ${requestedModel}`,
+          error: dbError,
           is_stream: isStream ? 1 : 0,
         })
-        return openAIError(503, `all accounts for model "${requestedModel}" are unavailable`, 'server_error')
+        // Client: stable generic message. DB has the real error above.
+        return openAIError(
+          503,
+          `all accounts for model "${requestedModel}" are unavailable`,
+          'server_error',
+        )
       }
 
       console.log(`[${lease.pool.name}] routing request (poolModel: ${lease.pool.sessionModel}) via run: ${lease.run.id}`)
@@ -94,7 +112,29 @@ export function handleChatCompletions(
         headers = resp.headers as Record<string, string | string[] | undefined>
         body = resp.body
       } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
         console.log(`[${lease.pool.name}] upstream network error: ${err}`)
+        // Log this attempt's real failure before retry
+        const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
+        db.insertRequestLog({
+          created_at: new Date(startTime).toISOString(),
+          api_key: apiKey ?? null,
+          api_key_id: apiKeyId,
+          account_id: lease.pool.name,
+          model: requestedModel,
+          agent_id: agentId,
+          run_id: lease.run.id,
+          status_code: 502,
+          tokens_in: null,
+          tokens_out: null,
+          latency_ms: Date.now() - startTime,
+          error: `upstream network error: ${detail}`.slice(0, 500),
+          is_stream: isStream ? 1 : 0,
+        })
+        lastUpstreamStatus = 502
+        lastUpstreamError = `upstream network error: ${detail}`
+        lastUpstreamAccount = lease.pool.name
+        lastUpstreamRunId = lease.run.id
         failedPools.add(lease.pool.name)
         poolManager.release(lease)
         if (attempt < 2) continue
@@ -187,8 +227,32 @@ export function handleChatCompletions(
         }
       }
 
+      // Non-2xx from Freebuff — always log the RAW body for this attempt
       const errorBody = sanitizeBodyText(await readDecompressedBody(body, headers))
       const latency = Date.now() - startTime
+      const rawError = errorBody.trim().slice(0, 500)
+      const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
+
+      lastUpstreamStatus = statusCode
+      lastUpstreamError = rawError || `upstream HTTP ${statusCode}`
+      lastUpstreamAccount = lease.pool.name
+      lastUpstreamRunId = lease.run.id
+
+      db.insertRequestLog({
+        created_at: new Date(startTime).toISOString(),
+        api_key: apiKey ?? null,
+        api_key_id: apiKeyId,
+        account_id: lease.pool.name,
+        model: requestedModel,
+        agent_id: agentId,
+        run_id: lease.run.id,
+        status_code: statusCode,
+        tokens_in: null,
+        tokens_out: null,
+        latency_ms: latency,
+        error: lastUpstreamError,
+        is_stream: isStream ? 1 : 0,
+      })
 
       if (isQuotaError(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)
@@ -208,7 +272,6 @@ export function handleChatCompletions(
       if (isSessionInvalid(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: session invalid — ending session and rebuilding fresh`)
         lease.pool.invalidateSession(errorBody.trim())
-        // Force-end the dead session on upstream so next acquire builds a brand-new one
         await lease.pool.endSessionNow().catch((err: unknown) => console.log(`${lease.pool.name}: endSession error: ${err}`))
         failedPools.add(lease.pool.name)
         poolManager.release(lease)
@@ -231,23 +294,7 @@ export function handleChatCompletions(
       poolManager.release(lease)
       console.log(`[${lease.pool.name}] upstream error: ${statusCode} ${errorBody.trim()}`)
 
-      const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
-      db.insertRequestLog({
-        created_at: new Date(startTime).toISOString(),
-        api_key: apiKey ?? null,
-        api_key_id: apiKeyId,
-        account_id: lease.pool.name,
-        model: requestedModel,
-        agent_id: agentId,
-        run_id: lease.run.id,
-        status_code: statusCode,
-        tokens_in: null,
-        tokens_out: null,
-        latency_ms: latency,
-        error: errorBody.trim().slice(0, 500),
-        is_stream: isStream ? 1 : 0,
-      })
-
+      // Terminal (no more retry for this status) — return Freebuff status/body to client
       const trimmed = errorBody.trim()
       if (trimmed && trimmed.startsWith('{')) {
         const { message, type, code } = extractUpstreamError(trimmed)
@@ -256,21 +303,23 @@ export function handleChatCompletions(
       return openAIError(statusCode, trimmed || 'upstream error', 'upstream_error')
     }
 
+    // Exhausted chat-level retries (quota/403/session/run paths all continued)
     const latency = Date.now() - startTime
     const apiKeyId = apiKey ? getApiKeyId(apiKey) : null
+    const finalError = (lastUpstreamError ?? 'upstream run expired across all accounts').slice(0, 500)
     db.insertRequestLog({
       created_at: new Date(startTime).toISOString(),
       api_key: apiKey ?? null,
       api_key_id: apiKeyId,
-      account_id: null,
+      account_id: lastUpstreamAccount,
       model: requestedModel,
       agent_id: agentId,
-      run_id: null,
-      status_code: 502,
+      run_id: lastUpstreamRunId,
+      status_code: lastUpstreamStatus ?? 502,
       tokens_in: null,
       tokens_out: null,
       latency_ms: latency,
-      error: 'upstream run expired across all accounts',
+      error: finalError,
       is_stream: isStream ? 1 : 0,
     })
     return openAIError(502, 'upstream run expired across all accounts', 'server_error')
