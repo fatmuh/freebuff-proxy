@@ -1,27 +1,81 @@
-import { request, Agent, ProxyAgent, Socks5ProxyAgent, interceptors } from 'undici'
+import { request, Agent, ProxyAgent, interceptors } from 'undici'
 import type { Dispatcher } from 'undici'
+import { SocksClient } from 'socks'
+import tls from 'node:tls'
+import type { ConnectionOptions } from 'node:tls'
+import type { Socket } from 'node:net'
 import type { FreeSessionResponse } from './types.js'
 import { generateUserAgent } from './utils.js'
 import type { ProxyEntry } from './proxy-store.js'
 
 type ReqOpts = Parameters<typeof request>[1]
 
+// SOCKS5 via custom undici connect (per destination).
+// undici's built-in Socks5ProxyAgent pins one Pool to the first origin and
+// poisons multi-host use (e.g. Test → httpbin then Freebuff → 503 HTML).
+function createSocksAgent(proxy: ProxyEntry, requestTimeout: number): Dispatcher {
+  const connectTimeout = Math.min(requestTimeout / 2, 15_000)
+  const socksProxy = {
+    host: proxy.host,
+    port: proxy.port,
+    type: 5 as const,
+    ...(proxy.username && { userId: proxy.username }),
+    ...(proxy.password && { password: proxy.password }),
+  }
+
+  // undici replaces full TCP+TLS with this connect fn. Returned socket must
+  // already be TLS-wrapped for https destinations.
+  const connectFn = (
+    opts: { hostname: string; port: string | number; protocol: string },
+    cb: (err: Error | null, socket: Socket | null) => void,
+  ) => {
+    SocksClient.createConnection({
+      proxy: socksProxy,
+      command: 'connect',
+      destination: {
+        host: opts.hostname,
+        port: Number(opts.port) || 443,
+      },
+      timeout: connectTimeout,
+    })
+      .then((info) => {
+        const raw = info.socket
+        if (opts.protocol === 'https:') {
+          const tlsSocket = tls.connect({
+            socket: raw,
+            host: opts.hostname,
+            servername: opts.hostname,
+            ALPNProtocols: ['http/1.1'],
+            rejectUnauthorized: true,
+          } as ConnectionOptions)
+          tlsSocket.once('secureConnect', () => cb(null, tlsSocket))
+          tlsSocket.once('error', (err) => cb(err, null))
+        } else {
+          cb(null, raw)
+        }
+      })
+      .catch((err: Error) => cb(err, null))
+  }
+
+  return new Agent({
+    keepAliveTimeout: 60_000,
+    keepAliveMaxTimeout: 600_000,
+    headersTimeout: requestTimeout,
+    bodyTimeout: requestTimeout,
+    connect: connectFn as Agent.Options['connect'],
+  })
+}
+
 // Build the right undici dispatcher for a proxy entry
 function createProxyDispatcher(proxy: ProxyEntry, requestTimeout: number): Dispatcher {
-  const scheme = proxy.type === 'socks5' ? 'socks5' : 'http'
+  if (proxy.type === 'socks5') {
+    return createSocksAgent(proxy, requestTimeout)
+  }
+
   const auth = proxy.username
     ? `${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@`
     : ''
-  const proxyUrl = `${scheme}://${auth}${proxy.host}:${proxy.port}`
-
-  if (proxy.type === 'socks5') {
-    return new Socks5ProxyAgent(proxyUrl, {
-      keepAliveTimeout: 60_000,
-      keepAliveMaxTimeout: 600_000,
-      headersTimeout: requestTimeout,
-      bodyTimeout: requestTimeout,
-    } as Socks5ProxyAgent.Options)
-  }
+  const proxyUrl = `http://${auth}${proxy.host}:${proxy.port}`
 
   return new ProxyAgent({
     uri: proxyUrl,

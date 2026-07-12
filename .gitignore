@@ -4,3 +4,10 @@ dist-dashboard/
 data/
 *.log
 .env
+
+# ssh-socks tunnels
+ssh-socks/config
+ssh-socks/keys/*
+!ssh-socks/keys/.gitkeep
+ssh-socks/state/
+ssh-socks
