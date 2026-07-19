@@ -115,19 +115,33 @@ export function isRateLimitError(statusCode: number, errorBody: string): boolean
   return lower.includes('free_mode_rate_limited') || lower.includes('rate limit exceeded')
 }
 
-/** Freebuff account permanently rejected (ban / country block). */
+/** Freebuff account permanently banned (not country_blocked). */
 export function isAccountBannedError(statusCode: number, errorBody: string): boolean {
   if (statusCode !== 403) return false
   const lower = errorBody.toLowerCase()
   if (lower.includes('"status":"banned"') || lower.includes('"status": "banned"')) return true
-  if (lower.includes('"status":"country_blocked"') || lower.includes('"status": "country_blocked"')) return true
-  if (lower.includes('status":"banned') || lower.includes('status":"country_blocked')) return true
+  if (lower.includes('status":"banned')) return true
   try {
     const parsed = JSON.parse(errorBody) as { status?: unknown }
     const s = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : ''
-    return s === 'banned' || s === 'country_blocked'
+    return s === 'banned'
   } catch {
-    return lower.includes('banned') || lower.includes('country_blocked')
+    // bare "banned" only when not country_blocked noise
+    return lower.includes('banned') && !lower.includes('country_blocked')
+  }
+}
+
+/** Geo reject — fail over only, never permanent ban. */
+export function isCountryBlockedError(statusCode: number, errorBody: string): boolean {
+  if (statusCode !== 403) return false
+  const lower = errorBody.toLowerCase()
+  if (lower.includes('country_blocked')) return true
+  try {
+    const parsed = JSON.parse(errorBody) as { status?: unknown }
+    const s = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : ''
+    return s === 'country_blocked'
+  } catch {
+    return false
   }
 }
 

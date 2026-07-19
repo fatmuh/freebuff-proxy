@@ -121,7 +121,7 @@ export class TokenPool {
     if (!this._banned) return
     this._banned = false
     this.banReason = ''
-    if (this.lastError.toLowerCase().includes('banned') || this.lastError.toLowerCase().includes('country_blocked')) {
+    if (this.lastError.toLowerCase().includes('banned') && !this.lastError.toLowerCase().includes('country_blocked')) {
       this.lastError = ''
     }
     this.log(`${this.name}: ban flag cleared`)
@@ -520,9 +520,14 @@ export class TokenPool {
     const model = this.sessionModel
     try {
       const result = await this.refreshSession(model)
-      if (result.status === 'banned' || result.status === 'country_blocked') {
-        this.markBanned(result.status)
+      if (result.status === 'banned') {
+        this.markBanned('banned')
         return null
+      }
+      if (result.status === 'country_blocked') {
+        // Geo reject: fail over only — not permanent ban.
+        this.lastError = 'country_blocked'
+        throw new Error('country_blocked')
       }
       if (result.status === 'active' && result.instanceId) {
         // Upstream may bind to a different model than requested (e.g. free tier
@@ -566,9 +571,10 @@ export class TokenPool {
       const msg = String(err)
       this.lastError = msg
       // Legacy throw path if parseSessionResponse still throws banned text
-      if (msg.includes('"status":"banned"') || msg.includes('status":"banned') || msg.includes('country_blocked')) {
-        const reason = msg.includes('country_blocked') ? 'country_blocked' : 'banned'
-        this.markBanned(reason)
+      if (msg.includes('"status":"banned"') || msg.includes('status":"banned')) {
+        if (!msg.includes('country_blocked')) this.markBanned('banned')
+      } else if (msg.includes('country_blocked')) {
+        this.lastError = 'country_blocked'
       }
       this.log(`${this.name}: session refresh failed:`, err)
       return null

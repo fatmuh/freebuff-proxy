@@ -5,7 +5,7 @@ import type { Dispatcher } from 'undici'
 import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
-import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, isCountryBlockedError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
 import { resolveModelId } from '../types.js'
 import { convertResponsesToChat, buildResponseObject } from '../responses-converter.js'
 import { createResponsesTransform } from '../responses-stream.js'
@@ -313,9 +313,15 @@ export function handleResponses(
         continue
       }
       if (isAccountBannedError(statusCode, errorBody)) {
-        const reason = errorBody.toLowerCase().includes('country_blocked') ? 'country_blocked' : 'banned'
-        console.log(`${lease.pool.name}: account ${reason} — marking inactive`)
-        lease.pool.markBanned(reason)
+        console.log(`${lease.pool.name}: account banned — marking inactive`)
+        lease.pool.markBanned('banned')
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
+      }
+      if (isCountryBlockedError(statusCode, errorBody)) {
+        console.log(`${lease.pool.name}: country_blocked — fail over (no permanent ban)`)
+        lease.pool.lastError = 'country_blocked'
         failedPools.add(lease.pool.name)
         poolManager.release(lease)
         continue
