@@ -8,8 +8,9 @@ import { AuthStore } from './auth-store.js'
 import { ProxyStore } from './proxy-store.js'
 import { DB } from './db.js'
 import { createHonoApp } from './server.js'
-import { BUN_USER_AGENT } from './utils.js'
 import { AdsSpoof } from './ads-spoof.js'
+import { FreebuffClientHeaders } from './freebuff-client-headers.js'
+import { BUN_USER_AGENT_FALLBACK } from './utils.js'
 import { serve } from '@hono/node-server'
 
 export interface FreebuffProxy {
@@ -22,10 +23,18 @@ export async function createServer(): Promise<FreebuffProxy> {
 
   const log = (...args: unknown[]) => console.log('[Freebuff2API]', ...args)
 
-  const client = new UpstreamClient(cfg.upstreamBaseURL, cfg.requestTimeout, BUN_USER_AGENT)
+  const client = new UpstreamClient(cfg.upstreamBaseURL, cfg.requestTimeout, BUN_USER_AGENT_FALLBACK)
+
+  const clientHeaders = new FreebuffClientHeaders(client, log)
+  await clientHeaders.start()
+  client.setUserAgents({
+    sessionUserAgent: () => clientHeaders.sessionUserAgent(),
+    chatUserAgent: () => clientHeaders.chatUserAgent(),
+  })
 
   const registry = new ModelRegistry(client, log)
   await registry.start()
+
 
   const auth = new AuthStore('data', log)
   await auth.load()
@@ -57,7 +66,9 @@ export async function createServer(): Promise<FreebuffProxy> {
 
   const runs = new RunManager(cfg, client, log)
   const poolManager = new ModelPoolManager(cfg, client, log)
-  const adsSpoof = new AdsSpoof(cfg.upstreamBaseURL, client, log)
+  const adsSpoof = new AdsSpoof(cfg.upstreamBaseURL, client, log, {
+    getCliUserAgent: () => clientHeaders.adsUserAgent(),
+  })
   runs.setAdsSpoof(adsSpoof)
 
   // Load accounts from auth.json into RunManager and ModelPoolManager
@@ -107,6 +118,7 @@ export async function createServer(): Promise<FreebuffProxy> {
       server.close()
       await runs.close()
       registry.stop()
+      clientHeaders.stop()
       db.close()
     },
   }

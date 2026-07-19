@@ -5,7 +5,7 @@ import tls from 'node:tls'
 import type { ConnectionOptions } from 'node:tls'
 import type { Socket } from 'node:net'
 import type { FreeSessionResponse } from './types.js'
-import { generateUserAgent } from './utils.js'
+import { BUN_USER_AGENT_FALLBACK, CHAT_USER_AGENT_FALLBACK } from './utils.js'
 import type { ProxyEntry } from './proxy-store.js'
 
 type ReqOpts = Parameters<typeof request>[1]
@@ -88,14 +88,16 @@ function createProxyDispatcher(proxy: ProxyEntry, requestTimeout: number): Dispa
 
 export class UpstreamClient {
   private baseURL: string
-  private userAgent: string
+  private getSessionUserAgent: () => string
+  private getChatUserAgent: () => string
   private defaultDispatcher: Dispatcher
   private proxyDispatchers = new Map<string, Dispatcher>()
   private requestTimeout: number
 
-  constructor(baseURL: string, requestTimeout: number, userAgent: string) {
+  constructor(baseURL: string, requestTimeout: number, sessionUserAgent = BUN_USER_AGENT_FALLBACK) {
     this.baseURL = baseURL
-    this.userAgent = userAgent
+    this.getSessionUserAgent = () => sessionUserAgent
+    this.getChatUserAgent = () => CHAT_USER_AGENT_FALLBACK
     this.requestTimeout = requestTimeout
 
     const agent = new Agent({
@@ -118,6 +120,15 @@ export class UpstreamClient {
     })
 
     this.defaultDispatcher = agent
+  }
+
+  /** Wire live Freebuff CLI UAs after GitHub version fetch. */
+  setUserAgents(opts: {
+    sessionUserAgent?: () => string
+    chatUserAgent?: () => string
+  }): void {
+    if (opts.sessionUserAgent) this.getSessionUserAgent = opts.sessionUserAgent
+    if (opts.chatUserAgent) this.getChatUserAgent = opts.chatUserAgent
   }
 
   // Register or update a proxy dispatcher for a proxy entry
@@ -186,7 +197,7 @@ export class UpstreamClient {
         'authorization': `Bearer ${authToken}`,
         'content-type': 'application/json',
         'accept': '*/*',
-        'user-agent': generateUserAgent(),
+        'user-agent': this.getChatUserAgent(),
         'connection': 'keep-alive',
       },
       body,
@@ -203,7 +214,7 @@ export class UpstreamClient {
       headers: {
         'authorization': `Bearer ${authToken}`,
         'accept': '*/*',
-        'user-agent': this.userAgent,
+        'user-agent': this.getSessionUserAgent(),
         'x-freebuff-model': model,
       },
     } as ReqOpts)
@@ -218,7 +229,7 @@ export class UpstreamClient {
       headers: {
         'authorization': `Bearer ${authToken}`,
         'accept': '*/*',
-        'user-agent': this.userAgent,
+        'user-agent': this.getSessionUserAgent(),
         'x-freebuff-instance-id': instanceId,
       },
     } as ReqOpts)
@@ -233,7 +244,7 @@ export class UpstreamClient {
       headers: {
         'authorization': `Bearer ${authToken}`,
         'accept': '*/*',
-        'user-agent': this.userAgent,
+        'user-agent': this.getSessionUserAgent(),
       },
     } as ReqOpts)
     if (statusCode === 404) return
@@ -282,7 +293,7 @@ export class UpstreamClient {
         'authorization': `Bearer ${authToken}`,
         'content-type': 'application/json',
         'accept': '*/*',
-        'user-agent': this.userAgent,
+        'user-agent': this.getSessionUserAgent(),
       },
       body,
     } as ReqOpts)

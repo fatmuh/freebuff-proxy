@@ -1,6 +1,6 @@
 import { request } from 'undici'
 import type { UpstreamClient } from './upstream.js'
-import { FREEBUFF_CLI_USER_AGENT } from './utils.js'
+import { FREEBUFF_CLI_USER_AGENT_FALLBACK } from './utils.js'
 import { randomUUID } from 'node:crypto'
 import { platform } from 'node:os'
 
@@ -16,6 +16,8 @@ const DEFAULT_MIN_INTERVAL_MS = 5 * 60_000
 export interface AdsSpoofOptions {
   enabled?: boolean
   minIntervalMs?: number
+  /** Live Freebuff-CLI/<version> UA; falls back if missing. */
+  getCliUserAgent?: () => string
 }
 
 export class AdsSpoof {
@@ -25,6 +27,8 @@ export class AdsSpoof {
   private enabled: boolean
   private minIntervalMs: number
   private lastByAccount = new Map<string, number>()
+  private getCliUserAgent: () => string
+
   private sessionIdByAccount = new Map<string, string>()
 
   constructor(
@@ -39,6 +43,7 @@ export class AdsSpoof {
     const envOff = process.env.ADS_SPOOF === '0' || process.env.ADS_SPOOF === 'false'
     this.enabled = opts.enabled ?? !envOff
     this.minIntervalMs = opts.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS
+    this.getCliUserAgent = opts.getCliUserAgent ?? (() => FREEBUFF_CLI_USER_AGENT_FALLBACK)
   }
 
   /** Non-blocking. Safe to call from session create / chat paths. */
@@ -88,7 +93,7 @@ export class AdsSpoof {
         authorization: `Bearer ${authToken}`,
         'content-type': 'application/json',
         accept: '*/*',
-        'user-agent': FREEBUFF_CLI_USER_AGENT,
+        'user-agent': this.getCliUserAgent(),
       },
       body,
       signal: AbortSignal.timeout(15_000),
@@ -122,7 +127,7 @@ export class AdsSpoof {
         authorization: `Bearer ${authToken}`,
         'content-type': 'application/json',
         accept: '*/*',
-        'user-agent': FREEBUFF_CLI_USER_AGENT,
+        'user-agent': this.getCliUserAgent(),
       },
       body: JSON.stringify({ impUrl, mode: 'LITE' }),
       signal: AbortSignal.timeout(15_000),

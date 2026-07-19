@@ -16,14 +16,15 @@ export function generateClientSessionId(): string {
   return out.join('')
 }
 
-export function generateUserAgent(): string {
-  return 'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.20 runtime/browser'
-}
+/** Fallback chat UA when GitHub provider-utils fetch fails (matches real CLI mitm). */
+export const CHAT_USER_AGENT_FALLBACK =
+  'ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.20 runtime/browser'
 
-export const BUN_USER_AGENT = 'Bun/1.3.14'
+/** Fallback session / agent-runs UA. */
+export const BUN_USER_AGENT_FALLBACK = 'Bun/1.3.14'
 
-/** Freebuff CLI ads endpoints use this UA (not Bun / ai-sdk). */
-export const FREEBUFF_CLI_USER_AGENT = 'Freebuff-CLI/0.0.122'
+/** Fallback Freebuff CLI ads UA when GitHub version fetch fails. */
+export const FREEBUFF_CLI_USER_AGENT_FALLBACK = 'Freebuff-CLI/0.0.122'
 
 // ─── Sleep ─────────────────────────────────────────────────────
 
