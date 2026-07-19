@@ -117,6 +117,34 @@ export class AuthStore {
     this.persist()
   }
 
+  /** Permanent upstream reject — stop routing until manually re-enabled. */
+  markAccountBanned(id: string, reason: string): void {
+    const acct = this.accounts.get(id)
+    if (!acct) return
+    if (acct.serve_status === 'inactive') {
+      this.log('auth store: account already inactive', id, reason)
+      return
+    }
+    acct.serve_status = 'inactive'
+    // Keep paused=false so UI can show Banned distinctly from manual pause.
+    this.accounts.set(id, acct)
+    this.rebuildModelIndex()
+    this.persist()
+    this.log('auth store: marked banned/inactive', id, reason)
+  }
+
+  /** User re-enabled account after ban (resume / set serve active). */
+  clearAccountBan(id: string): void {
+    const acct = this.accounts.get(id)
+    if (!acct) return
+    if (acct.serve_status === 'active') return
+    acct.serve_status = 'active'
+    this.accounts.set(id, acct)
+    this.rebuildModelIndex()
+    this.persist()
+    this.log('auth store: cleared ban / re-enabled', id)
+  }
+
   removeAccount(id: string): boolean {
     const deleted = this.accounts.delete(id)
     if (deleted) {

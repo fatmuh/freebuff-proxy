@@ -115,6 +115,22 @@ export function isRateLimitError(statusCode: number, errorBody: string): boolean
   return lower.includes('free_mode_rate_limited') || lower.includes('rate limit exceeded')
 }
 
+/** Freebuff account permanently rejected (ban / country block). */
+export function isAccountBannedError(statusCode: number, errorBody: string): boolean {
+  if (statusCode !== 403) return false
+  const lower = errorBody.toLowerCase()
+  if (lower.includes('"status":"banned"') || lower.includes('"status": "banned"')) return true
+  if (lower.includes('"status":"country_blocked"') || lower.includes('"status": "country_blocked"')) return true
+  if (lower.includes('status":"banned') || lower.includes('status":"country_blocked')) return true
+  try {
+    const parsed = JSON.parse(errorBody) as { status?: unknown }
+    const s = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : ''
+    return s === 'banned' || s === 'country_blocked'
+  } catch {
+    return lower.includes('banned') || lower.includes('country_blocked')
+  }
+}
+
 // ─── Upstream Error Extraction ─────────────────────────────────
 
 export interface UpstreamError {

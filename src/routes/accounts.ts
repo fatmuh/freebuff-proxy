@@ -160,8 +160,11 @@ export function handleAccountsUpdate(auth: AuthStore, runs: RunManager, poolMana
           await pool.endSessionNow().catch(() => {})
         }
       } else {
+        // Resume also re-enables after Freebuff ban (serve_status inactive).
+        auth.clearAccountBan(id)
         const pool = runs.getPoolByName(id)
         if (pool) {
+          pool.clearBan()
           pool.setPaused(false)
           void pool.prewarmSession()
         }
@@ -261,6 +264,8 @@ export function handleAccountUsage(auth: AuthStore, runs: RunManager, poolManage
       const dbRow = dbUsageMap.get(acct.id)
       const pool = runs.getPoolByName(acct.id)
       const effectivePaused = acct.paused || (pool?.isAutoPaused() ?? false)
+      const banned = pool?.isBanned() ?? false
+      const banReason = pool?.banReasonText() || (snap?.banReason ?? '')
       return {
         id: acct.id,
         name: acct.name,
@@ -268,8 +273,12 @@ export function handleAccountUsage(auth: AuthStore, runs: RunManager, poolManage
         session_model: acct.session_model,
         paused: effectivePaused,
         auto_paused: pool?.isAutoPaused() ?? false,
+        banned,
+        ban_reason: banReason,
         serve_status: acct.serve_status,
-        account_status: snap?.sessionStatus ?? 'none',
+        account_status: banned
+          ? (banReason || 'banned')
+          : (snap?.sessionStatus ?? 'none'),
         session_instance_id: snap?.sessionInstanceId ?? '',
         session_expires_at: snap?.sessionExpiresAt ?? null,
         session_remaining_ms: snap?.sessionRemainingMs ?? 0,
@@ -278,6 +287,7 @@ export function handleAccountUsage(auth: AuthStore, runs: RunManager, poolManage
         rate_limit: rateInfo?.rateLimit ?? snap?.rateLimit ?? null,
         rate_limits_by_model: rateInfo?.rateLimitsByModel ?? snap?.rateLimitsByModel ?? null,
         local_usage: dbRow ?? { requests: 0, tokens_in: 0, tokens_out: 0 },
+        last_error: snap?.lastError ?? '',
       }
     })
 

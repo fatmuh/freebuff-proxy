@@ -115,7 +115,11 @@ export class ModelPoolManager {
     if (ordered.length === 0) {
       const skipped = pools.map(ap => {
         const bits: string[] = [ap.account.id]
-        if (ap.account.serve_status !== 'active') bits.push(`serve=${ap.account.serve_status}`)
+        if (ap.pool.isBanned()) {
+          bits.push(`banned=${ap.pool.banReasonText() || 'banned'}`)
+        } else if (ap.account.serve_status !== 'active') {
+          bits.push(`serve=${ap.account.serve_status}`)
+        }
         if (ap.account.paused) bits.push('manual-paused')
         if (ap.pool.isAutoPaused()) bits.push('auto-paused-quota')
         if (ap.pool.isPaused() && !ap.account.paused && !ap.pool.isAutoPaused()) bits.push('paused')
@@ -142,8 +146,7 @@ export class ModelPoolManager {
           this.log(`model-pool-manager: acquire failed — ${msg}`)
           errors.push(msg)
 
-          // Cooldown → skip remaining retries on this account
-          if (ap.pool.isCoolingDown()) break
+          if (ap.pool.isCoolingDown() || ap.pool.isBanned()) break
 
           // Refresh session on session/run errors so next attempt gets a fresh one
           if (ap.pool.session?.status === 'active' || ap.pool.session?.status === 'queued') {
@@ -207,6 +210,7 @@ export class ModelPoolManager {
 
   private isHealthy(ap: AccountPool): boolean {
     if (ap.account.serve_status !== 'active') return false
+    if (ap.pool.isBanned()) return false
     if (ap.pool.isCoolingDown()) return false
     if (ap.account.paused) return false
     if (ap.pool.isPaused()) return false  // quota-exhausted auto-pause

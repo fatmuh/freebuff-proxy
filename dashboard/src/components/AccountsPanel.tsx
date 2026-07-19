@@ -21,8 +21,11 @@ interface AccountUsage {
   session_model: string
   paused: boolean
   auto_paused: boolean
+  banned?: boolean
+  ban_reason?: string
   serve_status: 'active' | 'inactive'
   account_status: string
+  last_error?: string
   session_instance_id: string
   session_expires_at: string | null
   session_remaining_ms: number
@@ -55,6 +58,8 @@ interface Pool {
   cooldownUntil: string | null
   lastError: string
   paused: boolean
+  banned?: boolean
+  banReason?: string
 }
 
 export default function AccountsPanel() {
@@ -274,15 +279,18 @@ export default function AccountsPanel() {
     return `${h}h ${m}m ${s}s`
   }
 
-  const statusBadge = (pool: Pool | undefined) => {
-    if (!pool) return <span class="badge badge-none">No Pool</span>
-    if (pool.paused) return <span class="badge badge-paused">Paused</span>
-    if (pool.switching) return <span class="badge badge-queued">Switching...</span>
-    if (pool.sessionStatus === 'active') {
+  const statusBadge = (pool: Pool | undefined, acct?: Account) => {
+    if (!pool && !acct) return <span class="badge badge-none">No Pool</span>
+    if (pool?.banned || acct?.serve_status === 'inactive') {
+      return <span class="badge badge-cooldown">Banned</span>
+    }
+    if (pool?.paused || acct?.paused) return <span class="badge badge-paused">Paused</span>
+    if (pool?.switching) return <span class="badge badge-queued">Switching...</span>
+    if (pool?.sessionStatus === 'active') {
       const remaining = pool.sessionExpiresAt ? Math.max(0, new Date(pool.sessionExpiresAt).getTime() - Date.now()) : 0
       return <span class="badge badge-active">Active ({formatDuration(remaining)})</span>
     }
-    if (pool.sessionStatus === 'queued') {
+    if (pool?.sessionStatus === 'queued') {
       const wait = pool.sessionEstWaitMs > 0 ? ` (~${formatDuration(pool.sessionEstWaitMs)})` : ''
       return (
         <span class="badge badge-queued">
@@ -290,8 +298,8 @@ export default function AccountsPanel() {
         </span>
       )
     }
-    if (pool.cooldownUntil) return <span class="badge badge-cooldown">Cooldown</span>
-    return <span class="badge badge-none">{pool.sessionStatus || 'None'}</span>
+    if (pool?.cooldownUntil) return <span class="badge badge-cooldown">Cooldown</span>
+    return <span class="badge badge-none">{pool?.sessionStatus || 'None'}</span>
   }
 
   // Group accounts by model for the model→account binding view
@@ -441,16 +449,23 @@ export default function AccountsPanel() {
                           </select>
                         </td>
                         <td>
-                          <span class={`badge ${acct.serve_status === 'active' ? 'badge-serve-active' : 'badge-serve-inactive'}`}>
-                            {acct.serve_status}
-                          </span>
+                          <Show when={getUsage(acct.id)?.banned || acct.serve_status === 'inactive'} fallback={
+                            <span class={`badge ${acct.serve_status === 'active' ? 'badge-serve-active' : 'badge-serve-inactive'}`}>
+                              {acct.serve_status}
+                            </span>
+                          }>
+                            <span class="badge badge-cooldown" title={getUsage(acct.id)?.ban_reason || getUsage(acct.id)?.last_error || 'banned'}>
+                              banned
+                            </span>
+                          </Show>
                         </td>
                         <td>
                           <Show when={getUsage(acct.id)} fallback={<span class="badge badge-none">-</span>}>
                             {usage => {
                               const status = usage().account_status
-                              return <span class={`badge ${status === 'active' ? 'badge-active' : status === 'queued' ? 'badge-queued' : 'badge-none'}`}>
-                                {status}
+                              const banned = usage().banned || status === 'banned' || status === 'country_blocked'
+                              return <span class={`badge ${banned ? 'badge-cooldown' : status === 'active' ? 'badge-active' : status === 'queued' ? 'badge-queued' : 'badge-none'}`} title={usage().last_error || usage().ban_reason || ''}>
+                                {banned ? (usage().ban_reason || status || 'banned') : status}
                               </span>
                             }}
                           </Show>
@@ -482,10 +497,12 @@ export default function AccountsPanel() {
                         </td>
                         <td class="actions">
                           <button class="btn btn-sm" onClick={() => handleRefresh(acct.id)}>Refresh</button>
-                          <Show when={!acct.paused} fallback={
-                            <button class="btn btn-sm" onClick={() => handlePause(acct.id, false)}>Resume</button>
-                          }>
+                          <Show when={acct.paused || getUsage(acct.id)?.banned || acct.serve_status === 'inactive'} fallback={
                             <button class="btn btn-sm" onClick={() => handlePause(acct.id, true)}>Pause</button>
+                          }>
+                            <button class="btn btn-sm" onClick={() => handlePause(acct.id, false)}>
+                              {getUsage(acct.id)?.banned || acct.serve_status === 'inactive' ? 'Re-enable' : 'Resume'}
+                            </button>
                           </Show>
                           <button class="btn btn-sm btn-danger" onClick={() => handleDelete(acct.id)}>Remove</button>
                         </td>

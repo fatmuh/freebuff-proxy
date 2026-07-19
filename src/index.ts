@@ -70,6 +70,9 @@ export async function createServer(): Promise<FreebuffProxy> {
     getCliUserAgent: () => clientHeaders.adsUserAgent(),
   })
   runs.setAdsSpoof(adsSpoof)
+  runs.setOnAccountBanned((poolName, reason) => {
+    auth.markAccountBanned(poolName, reason)
+  })
 
   // Load accounts from auth.json into RunManager and ModelPoolManager
   const accountTokens = auth.getAccountTokens()
@@ -84,9 +87,15 @@ export async function createServer(): Promise<FreebuffProxy> {
       'data/session-state.json',
       acct.proxy_id,
     )
-    runs.addPool(pool)
-
+    // Persist ban across restarts: serve_status inactive from prior ban.
     const fullAcct = auth.getAccount(acct.id)
+    if (fullAcct?.serve_status === 'inactive') {
+      pool.markBanned('banned')
+    }
+    if (fullAcct?.paused) {
+      pool.setPaused(true)
+    }
+    runs.addPool(pool)
     if (fullAcct) poolManager.addPool(fullAcct, pool)
   }
 

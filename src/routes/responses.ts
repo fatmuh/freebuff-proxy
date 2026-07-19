@@ -5,7 +5,7 @@ import type { Dispatcher } from 'undici'
 import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
-import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
 import { resolveModelId } from '../types.js'
 import { convertResponsesToChat, buildResponseObject } from '../responses-converter.js'
 import { createResponsesTransform } from '../responses-stream.js'
@@ -308,6 +308,14 @@ export function handleResponses(
       if (isQuotaError(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)
         lease.pool.triggerQuotaPause()
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
+      }
+      if (isAccountBannedError(statusCode, errorBody)) {
+        const reason = errorBody.toLowerCase().includes('country_blocked') ? 'country_blocked' : 'banned'
+        console.log(`${lease.pool.name}: account ${reason} — marking inactive`)
+        lease.pool.markBanned(reason)
         failedPools.add(lease.pool.name)
         poolManager.release(lease)
         continue

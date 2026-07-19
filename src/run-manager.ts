@@ -54,6 +54,9 @@ export class TokenPool {
   private _restoredState = false
   private _paused = false
   private _autoPaused = false
+  private _banned = false
+  private banReason = ''
+  private onAccountBanned: ((poolName: string, reason: string) => void) | null = null
   _switching = false
 
   // Usage tracking
@@ -88,9 +91,47 @@ export class TokenPool {
     this.adsSpoof = ads
   }
 
+  setOnAccountBanned(cb: ((poolName: string, reason: string) => void) | null): void {
+    this.onAccountBanned = cb
+  }
+
+  isBanned(): boolean {
+    return this._banned
+  }
+
+  banReasonText(): string {
+    return this.banReason
+  }
+
+  /** Permanent Freebuff reject — stop routing this pool. */
+  markBanned(reason: string): void {
+    if (this._banned) return
+    this._banned = true
+    this.banReason = reason || 'banned'
+    this.lastError = this.banReason
+    this.session = null
+    this.clearIdleTimer()
+    this.clearCooldown()
+    this.log(`${this.name}: BANNED — ${this.banReason}`)
+    this.onAccountBanned?.(this.name, this.banReason)
+  }
+
+  /** Clear ban flag when user re-enables the account. */
+  clearBan(): void {
+    if (!this._banned) return
+    this._banned = false
+    this.banReason = ''
+    if (this.lastError.toLowerCase().includes('banned') || this.lastError.toLowerCase().includes('country_blocked')) {
+      this.lastError = ''
+    }
+    this.log(`${this.name}: ban flag cleared`)
+  }
+
   // ─── Public: Session ──────────────────────────────────────────
 
   async ensureSession(): Promise<string | null> {
+    if (this._banned) return null
+
     // If we haven't tried restoring yet, try it
     if (!this._restoredState) {
       this._restoredState = true
@@ -293,6 +334,9 @@ export class TokenPool {
   }
 
   async acquire(agentId: string, model: string): Promise<RunLease> {
+    if (this._banned) {
+      throw new Error(`account banned: ${this.banReason || 'banned'}`)
+    }
     if (this.isCoolingDown()) {
       throw new Error(`token cooling down until ${this.cooldownUntil!.toISOString()}`)
     }
@@ -408,7 +452,7 @@ export class TokenPool {
       runs,
       drainingRuns: this.draining.length,
       switching: this._switching,
-      sessionStatus: this.session?.status ?? 'none',
+      sessionStatus: this._banned ? (this.banReason || 'banned') : (this.session?.status ?? 'none'),
       sessionInstanceId: this.session?.instanceId ?? '',
       sessionExpiresAt: this.session?.expiresAt?.toISOString() ?? null,
       sessionAdmittedAt: this.session?.admittedAt ?? null,
@@ -420,6 +464,8 @@ export class TokenPool {
       lastError: this.lastError,
       paused: this._paused,
       autoPaused: this._autoPaused,
+      banned: this._banned,
+      banReason: this.banReason,
       sessionCount: this.sessionCount,
       rateLimit: this.rateLimit,
       rateLimitsByModel: this.rateLimitsByModel,
@@ -470,9 +516,14 @@ export class TokenPool {
   }
 
   private async doSessionRefresh(): Promise<string | null> {
+    if (this._banned) return null
     const model = this.sessionModel
     try {
       const result = await this.refreshSession(model)
+      if (result.status === 'banned' || result.status === 'country_blocked') {
+        this.markBanned(result.status)
+        return null
+      }
       if (result.status === 'active' && result.instanceId) {
         // Upstream may bind to a different model than requested (e.g. free tier
         // forces deepseek even though we asked for kimi). Kill it immediately.
@@ -512,7 +563,13 @@ export class TokenPool {
       return null
     } catch (err) {
       this.session = null
-      this.lastError = String(err)
+      const msg = String(err)
+      this.lastError = msg
+      // Legacy throw path if parseSessionResponse still throws banned text
+      if (msg.includes('"status":"banned"') || msg.includes('status":"banned') || msg.includes('country_blocked')) {
+        const reason = msg.includes('country_blocked') ? 'country_blocked' : 'banned'
+        this.markBanned(reason)
+      }
       this.log(`${this.name}: session refresh failed:`, err)
       return null
     }
@@ -533,6 +590,10 @@ export class TokenPool {
       switch (state.status.trim()) {
         case 'disabled':
           return { status: 'disabled', instanceId: '', expiresAt: null, admittedAt: null, remainingMs: 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
+
+        case 'banned':
+        case 'country_blocked':
+          return { status: state.status.trim(), instanceId: '', expiresAt: null, admittedAt: null, remainingMs: 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
 
         case 'model_locked': {
           lockedRetries++
@@ -705,6 +766,7 @@ export class RunManager {
   private agentIds: string[] = []
   private nextIdx = 0
   private adsSpoof: AdsSpoof | null = null
+  private onAccountBanned: ((poolName: string, reason: string) => void) | null = null
 
   constructor(config: Config, upstreamClient: UpstreamClient, log: (...args: unknown[]) => void) {
     this.config = config
@@ -716,6 +778,11 @@ export class RunManager {
   setAdsSpoof(ads: AdsSpoof | null): void {
     this.adsSpoof = ads
     for (const pool of this.pools) pool.setAdsSpoof(ads)
+  }
+
+  setOnAccountBanned(cb: ((poolName: string, reason: string) => void) | null): void {
+    this.onAccountBanned = cb
+    for (const pool of this.pools) pool.setOnAccountBanned(cb)
   }
 
   // ─── Switch Pool Model ────────────────────────────────────────
@@ -761,7 +828,7 @@ export class RunManager {
   async acquire(primaryModel: string, agentId: string, model: string): Promise<RunLease> {
     if (!this.pools.length) throw new Error('no auth tokens configured')
 
-    const matching = this.pools.filter(p => p.sessionModel === primaryModel && !p.isPaused())
+    const matching = this.pools.filter(p => p.sessionModel === primaryModel && !p.isPaused() && !p.isBanned())
 
     if (matching.length === 0) {
       throw new Error(`no session available for model ${primaryModel}. Add/switch an account in the dashboard.`)
@@ -803,6 +870,7 @@ export class RunManager {
 
   addPool(pool: TokenPool): void {
     if (this.adsSpoof) pool.setAdsSpoof(this.adsSpoof)
+    if (this.onAccountBanned) pool.setOnAccountBanned(this.onAccountBanned)
     this.pools.push(pool)
     this.log(`run-manager: added pool ${pool.name} (model: ${pool.sessionModel})`)
   }

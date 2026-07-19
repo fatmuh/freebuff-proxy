@@ -6,7 +6,7 @@ import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { BUFFY_SYSTEM_PROMPT } from '../system-prompt.js'
-import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
 import { resolveModelId } from '../types.js'
 
 export function handleChatCompletions(
@@ -257,6 +257,15 @@ export function handleChatCompletions(
       if (isQuotaError(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)
         lease.pool.triggerQuotaPause()
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
+      }
+
+      if (isAccountBannedError(statusCode, errorBody)) {
+        const reason = errorBody.toLowerCase().includes('country_blocked') ? 'country_blocked' : 'banned'
+        console.log(`${lease.pool.name}: account ${reason} — marking inactive`)
+        lease.pool.markBanned(reason)
         failedPools.add(lease.pool.name)
         poolManager.release(lease)
         continue

@@ -308,6 +308,21 @@ export class UpstreamClient {
 
     const text = await body.text()
 
+    // Terminal Freebuff account rejects — return status instead of throw so
+    // TokenPool can mark the account inactive and stop retrying.
+    if (statusCode === 403) {
+      try {
+        const parsed = JSON.parse(text) as { status?: unknown; message?: unknown }
+        const s = typeof parsed.status === 'string' ? parsed.status.trim() : ''
+        if (s === 'banned' || s === 'country_blocked') {
+          return {
+            status: s,
+            message: typeof parsed.message === 'string' ? parsed.message : s,
+          } as FreeSessionResponse
+        }
+      } catch { /* fall through to throw */ }
+    }
+
     if (statusCode === 409) {
       try {
         const parsed = JSON.parse(text)

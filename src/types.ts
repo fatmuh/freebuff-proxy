@@ -64,6 +64,8 @@ export type SessionStatus =
   | 'ended'
   | 'superseded'
   | 'model_locked'
+  | 'banned'
+  | 'country_blocked'
 
 export interface SessionRateLimit {
   model: string
@@ -140,6 +142,8 @@ export interface TokenSnapshot {
   lastError: string
   paused: boolean
   autoPaused: boolean
+  banned: boolean
+  banReason: string
   sessionCount: number
   rateLimit: SessionRateLimit | null
   rateLimitsByModel: RateLimitsByModel | null

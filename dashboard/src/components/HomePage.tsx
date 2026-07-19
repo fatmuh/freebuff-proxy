@@ -20,6 +20,8 @@ interface Pool {
   cooldownUntil: string | null
   lastError: string
   paused: boolean
+  banned?: boolean
+  banReason?: string
 }
 
 interface ModelUsage {
@@ -90,6 +92,9 @@ export default function HomePage() {
   }
 
   const statusBadge = (pool: Pool) => {
+    if (pool.banned || pool.sessionStatus === 'banned' || pool.sessionStatus === 'country_blocked') {
+      return <span class="badge badge-cooldown" title={pool.banReason || pool.lastError || 'banned'}>Banned</span>
+    }
     if (pool.paused) return <span class="badge badge-paused">Paused</span>
     if (pool.switching) return <span class="badge badge-queued">Switching...</span>
     if (pool.sessionStatus === 'active') {
