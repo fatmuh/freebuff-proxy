@@ -18,6 +18,7 @@ import { handleAccountsList, handleAccountsAdd, handleAccountsUpdate, handleAcco
 import { handleKeysList, handleKeysCreate, handleKeysDelete, handleKeysToggle, handleKeysUpdate } from './routes/keys.js'
 import { handleProxiesList, handleProxiesCreate, handleProxiesUpdate, handleProxiesDelete, handleProxiesTest } from './routes/proxies.js'
 import { openAIError, containsString } from './utils.js'
+import { getFreeModeBlockStatus } from './free-mode-gate.js'
 
 type Variables = { apiKey: string }
 
@@ -131,6 +132,7 @@ export function createHonoApp(
       active_accounts: active.length,
       queued_accounts: queued.length,
       active_by_model: perModel,
+      free_mode_block: getFreeModeBlockStatus(),
       queues: queued.map(q => ({
         name: q.name,
         model: q.sessionModel,

@@ -7,6 +7,7 @@ import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { BUFFY_SYSTEM_PROMPT } from '../system-prompt.js'
 import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, isCountryBlockedError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
+import { blockFreeMode, getFreeModeBlockStatus, isFreeModeBlocked, parseFreeModeRetryMs } from '../free-mode-gate.js'
 import { resolveModelId } from '../types.js'
 
 export function handleChatCompletions(
@@ -39,6 +40,15 @@ export function handleChatCompletions(
 
     const apiKey = c.get('apiKey') as string | undefined
     const isStream = payload.stream === true
+
+    // Global free-mode rate-limit block (memory only)
+    if (isFreeModeBlocked()) {
+      const gate = getFreeModeBlockStatus()
+      const mins = Math.max(1, Math.ceil(gate.remaining_ms / 60_000))
+      const msg = gate.message || `Free mode rate limit exceeded. Try again in ${mins} minutes.`
+      console.log(`[chat] free-mode blocked: remaining_ms=${gate.remaining_ms}`)
+      return openAIError(429, msg, 'rate_limit_error', 'free_mode_rate_limited')
+    }
 
     const startTime = Date.now()
     console.log(`[chat] incoming: model=${requestedModel} agentId=${agentId}`)
@@ -253,6 +263,21 @@ export function handleChatCompletions(
         error: lastUpstreamError,
         is_stream: isStream ? 1 : 0,
       })
+
+      if (isRateLimitError(statusCode, errorBody)) {
+        const retryMs = parseFreeModeRetryMs(errorBody) ?? 30 * 60_000
+        const gate = blockFreeMode(retryMs, errorBody.trim())
+        console.log(
+          `${lease.pool.name}: free-mode rate limit — blocking proxy for ${gate.remaining_sec}s (until ${gate.until})`,
+        )
+        poolManager.release(lease)
+        return openAIError(
+          429,
+          gate.message || errorBody.trim() || 'Free mode rate limit exceeded',
+          'rate_limit_error',
+          'free_mode_rate_limited',
+        )
+      }
 
       if (isQuotaError(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: quota error from upstream, auto-pausing and retrying`)

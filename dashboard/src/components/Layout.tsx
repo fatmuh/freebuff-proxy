@@ -18,6 +18,13 @@ interface StatusData {
   total_accounts: number
   active_accounts: number
   queued_accounts: number
+  free_mode_block?: {
+    blocked: boolean
+    until: string | null
+    remaining_ms: number
+    remaining_sec: number
+    message: string
+  }
   sessions: { name: string; status: string; instanceId: string; model: string; admittedAt: string | null; expiresAt: string | null; remainingMs: number }[]
 }
 
@@ -84,8 +91,18 @@ export default function Layout(props: { children: any }) {
     <div class="app-container">
       <header class="topbar">
         <div class="topbar-item">
-          <span class="topbar-dot topbar-dot-green"></span>
-          <span>Proxy Running</span>
+          <Show
+            when={status()?.free_mode_block?.blocked}
+            fallback={
+              <>
+                <span class="topbar-dot topbar-dot-green"></span>
+                <span>Proxy Running</span>
+              </>
+            }
+          >
+            <span class="topbar-dot topbar-dot-red"></span>
+            <span style={{ color: 'var(--accent-red)' }}>Free Mode Blocked</span>
+          </Show>
         </div>
         <Show when={status()}>
           <div class="topbar-item">
@@ -104,6 +121,14 @@ export default function Layout(props: { children: any }) {
             <span class="topbar-label">QUEUED</span>
             <span class="mono" style={{ color: '#f9e2af' }}>{status()!.queued_accounts}</span>
           </div>
+          <Show when={status()!.free_mode_block?.blocked}>
+            <div class="topbar-item" title={status()!.free_mode_block?.message || 'Free mode rate limited'}>
+              <span class="topbar-label" style={{ color: 'var(--accent-red)' }}>FREE MODE</span>
+              <span class="mono" style={{ color: 'var(--accent-red)' }}>
+                {formatRemaining(status()!.free_mode_block!.remaining_ms)} left
+              </span>
+            </div>
+          </Show>
         </Show>
       </header>
       <nav class="sidebar">
