@@ -236,6 +236,22 @@ export class UpstreamClient {
     return this.parseSessionResponse(statusCode, body)
   }
 
+  /** Read the raw upstream session response for dashboard diagnostics. */
+  async inspectSession(authToken: string, instanceId: string, proxyId?: string): Promise<{ statusCode: number; body: string }> {
+    const url = this.buildURL('/api/v1/freebuff/session')
+    const { statusCode, body } = await request(url, {
+      ...this.baseOpts(proxyId),
+      method: 'GET',
+      headers: {
+        'authorization': `Bearer ${authToken}`,
+        'accept': '*/*',
+        'user-agent': this.getSessionUserAgent(),
+        'x-freebuff-instance-id': instanceId,
+      },
+    } as ReqOpts)
+    return { statusCode, body: await body.text() }
+  }
+
   async endSession(authToken: string, proxyId?: string): Promise<void> {
     const url = this.buildURL('/api/v1/freebuff/session')
     const { statusCode, body } = await request(url, {

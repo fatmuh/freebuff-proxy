@@ -2,7 +2,7 @@ import type { Context } from 'hono'
 import type { RunManager } from '../run-manager.js'
 import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { AuthStore, Account } from '../auth-store.js'
-import type { Config } from '../types.js'
+import type { Config, FreeSessionResponse } from '../types.js'
 import type { DB } from '../db.js'
 import { resolveModelId } from '../types.js'
 import type { UpstreamClient } from '../upstream.js'
@@ -228,14 +228,21 @@ export function handleRefreshQuota(auth: AuthStore, runs: RunManager) {
 
     try {
       const instanceId = pool.currentSessionInstanceId()
-      const state = await pool.upstreamClient.getSession(pool.token, instanceId, pool.proxyId)
-      pool.captureUsageData(state)
+      const result = await pool.upstreamClient.inspectSession(pool.token, instanceId, pool.proxyId)
+      const ok = result.statusCode >= 200 && result.statusCode < 300
+      if (ok) {
+        try {
+          pool.captureUsageData(JSON.parse(result.body) as FreeSessionResponse)
+        } catch {
+          // The raw response is still useful to show, even if it is malformed.
+        }
+      }
       const rl = pool.rateLimit
-      console.log(`[refresh-quota] ${pool.name}: ${rl?.recentCount ?? '?'}/${rl?.limit ?? '?'} reset=${rl?.resetAt ?? 'none'}`)
-      return c.json({ ok: true, rateLimit: pool.rateLimit, rateLimitsByModel: pool.rateLimitsByModel })
+      console.log(`[refresh-quota] ${pool.name}: status=${result.statusCode} ${rl?.recentCount ?? '?'}/${rl?.limit ?? '?'} reset=${rl?.resetAt ?? 'none'}`)
+      return c.json({ ok, statusCode: result.statusCode, response: result.body, rateLimit: pool.rateLimit, rateLimitsByModel: pool.rateLimitsByModel })
     } catch (err) {
       console.log(`[refresh-quota] ${pool.name}: error — ${err}`)
-      return c.json({ error: `refresh failed: ${err}` }, 500)
+      return c.json({ ok: false, statusCode: null, response: `refresh failed: ${err}` })
     }
   }
 }

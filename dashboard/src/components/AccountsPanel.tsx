@@ -36,6 +36,14 @@ interface AccountUsage {
   local_usage: { requests: number; tokens_in: number; tokens_out: number }
 }
 
+interface QuotaRefreshResponse {
+  ok: boolean
+  statusCode: number | null
+  response: string
+  rateLimit: AccountUsage['rate_limit']
+  rateLimitsByModel: AccountUsage['rate_limits_by_model']
+}
+
 interface ProxyInfo {
   id: string
   name: string
@@ -81,9 +89,22 @@ export default function AccountsPanel() {
   const [authFlowPollCount, setAuthFlowPollCount] = createSignal(0)
   const [errorMsg, setErrorMsg] = createSignal<string | null>(null)
   const [confirmDelete, setConfirmDelete] = createSignal<string | null>(null)
-  const [toasts, setToasts] = createSignal<{ id: number; msg: string; type: string }[]>([])
   const [availableModels, setAvailableModels] = createSignal<string[]>([])
+
+  const [toast, setToast] = createSignal<{ id: number; msg: string; type: string } | null>(null)
   let toastId = 0
+  let toastTimer: number | undefined
+  
+  const addToast = (msg: string, type = 'info') => {
+    const id = ++toastId
+    setToast({ id, msg, type })
+    toastTimer = setTimeout(() => setToast(null), 4000)
+  }
+  
+  const dismissToast = () => {
+    clearTimeout(toastTimer)
+    setToast(null)
+  }
 
   const loadModels = async () => {
     try {
@@ -101,11 +122,6 @@ export default function AccountsPanel() {
       || el instanceof HTMLTextAreaElement
     }
 
-  const addToast = (msg: string, type = 'info') => {
-    const id = ++toastId
-    setToasts(prev => [...prev, { id, msg, type }])
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000)
-  }
 
   const refresh = async () => {
     try {
@@ -209,12 +225,15 @@ export default function AccountsPanel() {
   }
 
   const handleRefresh = async (id: string) => {
+    const accountName = accounts().find(account => account.id === id)?.name ?? id
     try {
-      await apiPost(`/api/accounts/${id}/refresh-quota`)
-      addToast('Quota refreshed', 'success')
+      const data = await apiPost<QuotaRefreshResponse>(`/api/accounts/${id}/refresh-quota`)
+      const rl = data.rateLimit
+      const usage = rl ? `${rl.model.split('/').pop()}: ${rl.recentCount}/${rl.limit}` : 'unlimited'
+      addToast(`Refresh — ${accountName} — HTTP ${data.statusCode ?? 'ERR'} — ${usage}`, data.ok ? 'success' : 'warn')
       refresh()
     } catch (err) {
-      addToast('Refresh failed: ' + err, 'error')
+      addToast(`Refresh response — ${accountName} — ERROR\n${err instanceof Error ? err.message : String(err)}`, 'error')
     }
   }
 
@@ -544,11 +563,14 @@ export default function AccountsPanel() {
         </div>
       </Show>
       <div class="toast-container">
-        <For each={toasts()} by={t => t.id}>
+        <Show when={toast()}>
           {(t) => (
-            <div class={`toast toast-${t.type}`}>{t.msg}</div>
+            <div class={`toast toast-${t().type}`}>
+              {t().msg}
+              <button class="toast-close" onClick={dismissToast}>×</button>
+            </div>
           )}
-        </For>
+        </Show>
       </div>
     </div>
   )
