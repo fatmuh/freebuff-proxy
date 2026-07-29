@@ -8,6 +8,7 @@ import { resolveModelId } from '../types.js'
 import type { UpstreamClient } from '../upstream.js'
 import { TokenPool } from '../run-manager.js'
 import { startWebAuthFlow, getAuthFlowState, removeAuthFlow, cancelAuthFlow } from '../auth.js'
+import { generateSyntheticFingerprint } from '../synthetic-fingerprint.js'
 import { maskToken } from '../utils.js'
 
 interface AddAccountBody {
@@ -41,6 +42,7 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, poolManager
     // If token provided → manual add (existing behavior)
     if (body.token) {
       const id = `acct-${auth.nextId()}`
+      const fp = generateSyntheticFingerprint(id)
       const account: Account = {
         id,
         name: body.name ?? id,
@@ -54,6 +56,10 @@ export function handleAccountsAdd(auth: AuthStore, runs: RunManager, poolManager
         paused: false,
         serve_status: 'active',
         account_status: 'idle',
+        fingerprint_id: fp.fingerprintId,
+        device_os: fp.deviceInfo.os,
+        device_timezone: fp.deviceInfo.timezone,
+        device_locale: fp.deviceInfo.locale,
       }
 
       auth.addAccount(account)
@@ -77,13 +83,12 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, poolMana
   return async (c: Context) => {
     const flowId = c.req.param('flowId')
     if (!flowId) return c.json({ error: 'flowId is required' }, 400)
-
     const state = getAuthFlowState(flowId)
     if (!state) return c.json({ error: 'flow not found' }, 404)
-
     if (state.status === 'authenticated' && state.authToken && state.user) {
       // Auto-create account from completed auth flow
       const id = `acct-${auth.nextId()}`
+      const fp = generateSyntheticFingerprint(id)
       const account: Account = {
         id,
         name: state.user.name || id,
@@ -97,6 +102,10 @@ export function handleAuthFlowStatus(auth: AuthStore, runs: RunManager, poolMana
         paused: false,
         serve_status: 'active',
         account_status: 'idle',
+        fingerprint_id: fp.fingerprintId,
+        device_os: fp.deviceInfo.os,
+        device_timezone: fp.deviceInfo.timezone,
+        device_locale: fp.deviceInfo.locale,
       }
 
       auth.addAccount(account)

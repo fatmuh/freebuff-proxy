@@ -8,6 +8,7 @@ import type { AuthStore } from './auth-store.js'
 import type { DB } from './db.js'
 import type { UpstreamClient } from './upstream.js'
 import type { ProxyStore } from './proxy-store.js'
+import type { AdsSpoof } from './ads-spoof.js'
 import { handleModelsList, handleModels } from './routes/models.js'
 import { handleChatCompletions } from './routes/chat.js'
 import { handleResponses } from './routes/responses.js'
@@ -21,7 +22,6 @@ import { openAIError, containsString } from './utils.js'
 import { getFreeModeBlockStatus } from './free-mode-gate.js'
 
 type Variables = { apiKey: string }
-
 export function createHonoApp(
   cfg: Config,
   registry: ModelRegistry,
@@ -31,6 +31,7 @@ export function createHonoApp(
   db: DB,
   upstreamClient: UpstreamClient,
   proxyStore: ProxyStore,
+  adsSpoof: AdsSpoof,
 ): Hono<{ Variables: Variables }> {
   const app = new Hono<{ Variables: Variables }>()
   const startedAt = new Date()
@@ -68,9 +69,8 @@ export function createHonoApp(
   })
 
   app.get('/api/models', handleModelsList(registry))
-  app.get('/v1/models', handleModels(registry, startedAt))
-  app.all('/v1/chat/completions', handleChatCompletions(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey)))
-  app.post('/v1/responses', handleResponses(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey)))
+  app.all('/v1/chat/completions', handleChatCompletions(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey), adsSpoof))
+  app.post('/v1/responses', handleResponses(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey), adsSpoof))
 
   app.get('/api/auth/check', handleAuthCheck())
   app.post('/api/auth/login', handleAuthLogin(db))

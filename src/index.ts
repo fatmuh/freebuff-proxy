@@ -106,7 +106,7 @@ export async function createServer(): Promise<FreebuffProxy> {
     db.cleanExpiredSessions()
   }, 6 * 3600_000)
 
-  const app = createHonoApp(cfg, registry, runs, poolManager, auth, db, client, proxyStore)
+  const app = createHonoApp(cfg, registry, runs, poolManager, auth, db, client, proxyStore, adsSpoof)
 
   const port = parsePort(cfg.listenAddr)
   const server = serve({

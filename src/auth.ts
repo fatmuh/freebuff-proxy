@@ -1,6 +1,7 @@
 import { request } from 'undici'
-import { randomBytes, createHash } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { sleep } from './utils.js'
+import { generateSyntheticFingerprint } from './synthetic-fingerprint.js'
 
 // ─── Auth Flow ─────────────────────────────────────────────────
 // Handles the CLI auth flow against freebuff.com:
@@ -28,20 +29,6 @@ interface AuthStatusUser {
 interface AuthStatusResponse {
   user: AuthStatusUser
   message: string
-}
-
-// ─── Fingerprint Generation ────────────────────────────────────
-// Generate a fingerprint matching: enhanced-{base64url-random}
-// The hash is SHA-256 of the fingerprintId
-
-function generateFingerprintId(): string {
-  const buf = randomBytes(32)
-  const b64 = buf.toString('base64url')
-  return `enhanced-${b64}`
-}
-
-function hashFingerprint(fingerprintId: string): string {
-  return createHash('sha256').update(fingerprintId).digest('hex')
 }
 
 // ─── HTTP Helpers ──────────────────────────────────────────────
@@ -84,8 +71,10 @@ async function authGet(path: string): Promise<{ statusCode: number; data: unknow
 // ─── Main Auth Flow (CLI — blocking) ──────────────────────────
 
 export async function authenticate(log: (...args: unknown[]) => void): Promise<string> {
-  const fingerprintId = generateFingerprintId()
-  const fingerprintHash = hashFingerprint(fingerprintId)
+  // Use a random account seed for CLI auth (no account context yet).
+  // The fingerprint is stable per login attempt but privacy-preserving.
+  const seed = `cli-${randomBytes(16).toString('hex')}`
+  const { fingerprintId } = generateSyntheticFingerprint(seed)
 
   // Step 1: POST /api/auth/cli/code → get login URL
   log('requesting login code...')
@@ -159,10 +148,11 @@ export interface WebAuthFlowState {
 }
 
 const activeFlows = new Map<string, WebAuthFlowState>()
-
 export function startWebAuthFlow(log: (...args: unknown[]) => void): Promise<WebAuthFlowResult> {
-  const fingerprintId = generateFingerprintId()
-  const fingerprintHash = hashFingerprint(fingerprintId)
+  // Use a random account seed for web auth — the fingerprint will be
+  // re-generated deterministically once the account is created.
+  const seed = `web-${randomBytes(16).toString('hex')}`
+  const { fingerprintId } = generateSyntheticFingerprint(seed)
   const flowId = `flow-${randomBytes(8).toString('hex')}`
 
   return (async () => {

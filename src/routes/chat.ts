@@ -1,3 +1,4 @@
+import type { AdsSpoof } from '../ads-spoof.js'
 import type { Context } from 'hono'
 import { Readable, Transform } from 'node:stream'
 import type { Dispatcher } from 'undici'
@@ -15,6 +16,7 @@ export function handleChatCompletions(
   poolManager: ModelPoolManager,
   db: DB,
   getApiKeyId: (apiKey: string) => string | null,
+  adsSpoof: AdsSpoof,
 ) {
   return async (c: Context) => {
     if (c.req.method !== 'POST') {
@@ -107,6 +109,7 @@ export function handleChatCompletions(
         lease.run.id,
         lease.pool.currentSessionInstanceId(),
         lease.pool.sessionModel,
+        lease.pool.traceSessionId,
       )
 
       let statusCode: number
@@ -141,6 +144,8 @@ export function handleChatCompletions(
           error: `upstream network error: ${detail}`.slice(0, 500),
           is_stream: isStream ? 1 : 0,
         })
+        // Per-prompt run: FINISH with failed status on network error
+        void lease.pool.failRun(lease.run, 'failed', `network error: ${detail}`).catch(() => {})
         lastUpstreamStatus = 502
         lastUpstreamError = `upstream network error: ${detail}`
         lastUpstreamAccount = lease.pool.name
@@ -180,6 +185,15 @@ export function handleChatCompletions(
           const { transformedStream, tokensIn, tokensOut, donePromise } = interceptStreamForUsage(body)
 
           void donePromise.then(() => {
+            const tIn = tokensIn()
+            const tOut = tokensOut()
+            // Per-prompt run lifecycle: report step + FINISH after stream completes
+            const credits = tOut ?? 0
+            void lease.pool.completeRun(lease.run, credits, null).catch(err => {
+              console.log(`[${lease.pool.name}] completeRun (stream) failed:`, err)
+            })
+            // Fire-and-forget cli_chat ad fetch with fake conversation
+            adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
             db.insertRequestLog({
               created_at: new Date(startTime).toISOString(),
               api_key: apiKey ?? null,
@@ -189,8 +203,8 @@ export function handleChatCompletions(
               agent_id: agentId,
               run_id: lease.run.id,
               status_code: statusCode,
-              tokens_in: tokensIn(),
-              tokens_out: tokensOut(),
+              tokens_in: tIn,
+              tokens_out: tOut,
               latency_ms: Date.now() - startTime,
               error: null,
               is_stream: 1,
@@ -209,13 +223,24 @@ export function handleChatCompletions(
           }
           let tokensIn: number | null = null
           let tokensOut: number | null = null
+          let messageId: string | null = null
           try {
             const json = JSON.parse(Buffer.from(bodyBuffer).toString())
             if (json.usage) {
               tokensIn = json.usage.prompt_tokens ?? null
               tokensOut = json.usage.completion_tokens ?? null
             }
+            if (json.id) messageId = json.id
           } catch { /* not JSON or no usage field */ }
+
+          // Per-prompt run lifecycle: report step + FINISH
+          const credits = (tokensOut ?? 0)
+          void lease.pool.completeRun(lease.run, credits, messageId).catch(err => {
+            console.log(`[${lease.pool.name}] completeRun failed:`, err)
+          })
+
+          // Fire-and-forget cli_chat ad fetch with fake conversation
+          adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
 
           db.insertRequestLog({
             created_at: new Date(startTime).toISOString(),
@@ -263,6 +288,9 @@ export function handleChatCompletions(
         error: lastUpstreamError,
         is_stream: isStream ? 1 : 0,
       })
+
+      // Per-prompt run: FINISH with failed status on non-2xx
+      void lease.pool.failRun(lease.run, 'failed', rawError).catch(() => {})
 
       if (isRateLimitError(statusCode, errorBody)) {
         const retryMs = parseFreeModeRetryMs(errorBody) ?? 30 * 60_000
@@ -366,13 +394,13 @@ export function handleChatCompletions(
     return openAIError(502, 'upstream run expired across all accounts', 'server_error')
   }
 }
-
 export function injectUpstreamMetadata(
   payload: Record<string, unknown>,
   requestedModel: string,
   runId: string,
   sessionInstanceId: string,
   poolModel: string,
+  traceSessionId: string,
 ): string {
   const cloned = JSON.parse(JSON.stringify(payload))
   cloned.model = poolModel
@@ -393,7 +421,7 @@ export function injectUpstreamMetadata(
   metadata.run_id = runId
   metadata.cost_mode = 'free'
   metadata.client_id = generateClientSessionId()
-  metadata.trace_session_id = crypto.randomUUID()
+  metadata.trace_session_id = traceSessionId
   if (sessionInstanceId) {
     metadata.freebuff_instance_id = sessionInstanceId
   }

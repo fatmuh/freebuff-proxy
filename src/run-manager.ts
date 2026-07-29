@@ -4,6 +4,7 @@ import type { AdsSpoof } from './ads-spoof.js'
 import { sleep } from './utils.js'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
+import { randomUUID as cryptoRandomUUID } from 'node:crypto'
 
 // ─── Constants ─────────────────────────────────────────────────
 
@@ -36,18 +37,22 @@ export class TokenPool {
   readonly token: string
   sessionModel: string
   readonly upstreamClient: UpstreamClient
-  proxyId: string
+  proxyId!: string
 
   private config: Config
   private log: (...args: unknown[]) => void
+  private stateFile: string
+  /** Per-prompt runs (empty — runs are created in acquire, completed in completeRun). */
   private _runs = new Map<string, ManagedRun>()
   private draining: ManagedRun[] = []
-  private stateFile: string
-
   session: CachedSession | null = null
   private sessionRefreshPromise: Promise<string | null> | null = null
   private sessionRebuildScheduled = false
   private idleTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Stable per-account trace_session_id (one per conversation, as the CLI
+   *  does it; since the proxy is conversation-agnostic we use one per account). */
+  readonly traceSessionId: string
 
   cooldownUntil: Date | null = null
   lastError = ''
@@ -84,7 +89,7 @@ export class TokenPool {
     this.upstreamClient = upstreamClient
     this.log = log
     this.stateFile = stateFile
-    this.proxyId = proxyId
+    this.traceSessionId = cryptoRandomUUID()
   }
 
   setAdsSpoof(ads: AdsSpoof | null): void {
@@ -346,27 +351,61 @@ export class TokenPool {
     const instanceId = await this.ensureSession()
     if (verbose) this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
 
-    let run = this._runs.get(agentId)
-    const needsRotate = !run || (Date.now() - run.startedAt.getTime() >= this.config.rotationInterval)
-
-    if (needsRotate) {
-      if (verbose) this.log(`${this.name}: rotating run for agent=${agentId}`)
-      await this.rotateAgent(agentId)
-      run = this._runs.get(agentId)!
+    // Per-prompt run: START a fresh run for every incoming request.
+    // The real CLI does one START → steps → FINISH per user prompt.
+    if (verbose) this.log(`${this.name}: starting run for agent=${agentId}`)
+    const runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
+    const run: ManagedRun = {
+      id: runId,
+      agentId,
+      startedAt: new Date(),
+      inflight: 1,
+      requestCount: 1,
+      finishing: false,
     }
-
-    if (!run) throw new Error('run missing after rotation')
-
-    run.inflight++
-    run.requestCount++
+    this.lastError = ''
     return { pool: this, run, model }
+  }
+
+  /** Report a step and FINISH the run — called after a successful chat completion.
+   *  This implements the real CLI's per-prompt lifecycle: START → step → FINISH. */
+  async completeRun(
+    run: ManagedRun,
+    credits: number,
+    messageId: string | null,
+  ): Promise<void> {
+    const startTime = run.startedAt.toISOString()
+    try {
+      await this.upstreamClient.addAgentStep(
+        this.token, run.id, 1, credits, [], messageId, 'completed', startTime, this.proxyId,
+      )
+      this.log(`${this.name}: run ${run.id} — step reported (credits=${credits})`)
+    } catch (err) {
+      this.log(`${this.name}: addAgentStep for run ${run.id} failed:`, err)
+    }
+    try {
+      await this.upstreamClient.finishRun(
+        this.token, run.id, 'completed', 1, credits, credits, undefined, this.proxyId,
+      )
+      this.log(`${this.name}: run ${run.id} — FINISH completed`)
+    } catch (err) {
+      this.log(`${this.name}: finishRun ${run.id} failed:`, err)
+    }
+  }
+
+  /** FINISH a run that failed — called on error paths. */
+  async failRun(run: ManagedRun, status: string, errorMessage: string): Promise<void> {
+    try {
+      await this.upstreamClient.finishRun(
+        this.token, run.id, status, run.requestCount, 0, 0, errorMessage, this.proxyId,
+      )
+    } catch (err) {
+      this.log(`${this.name}: failRun ${run.id} failed:`, err)
+    }
   }
 
   release(run: ManagedRun): void {
     if (run.inflight > 0) run.inflight--
-    this.finishIfReady(run).catch(err => {
-      this.log(`${this.name}: finish released run ${run.id} failed:`, err)
-    })
   }
 
   invalidate(run: ManagedRun, reason: string): void {
@@ -476,19 +515,7 @@ export class TokenPool {
   // ─── Maintenance ──────────────────────────────────────────────
 
   async maintain(): Promise<void> {
-    const toRotate: string[] = []
-    for (const [agentId, run] of this._runs) {
-      if (Date.now() - run.startedAt.getTime() >= this.config.rotationInterval) {
-        toRotate.push(agentId)
-      }
-    }
-    for (const agentId of toRotate) {
-      try { await this.rotateAgent(agentId) } catch (err) {
-        this.log(`${this.name}: rotate ${agentId} failed:`, err)
-      }
-    }
-    const drainingCopy = [...this.draining]
-    for (const run of drainingCopy) await this.finishIfReady(run)
+    // Per-prompt runs are completed inline — no cached-run rotation needed.
   }
 
   async shutdown(): Promise<void> {
@@ -729,36 +756,8 @@ export class TokenPool {
   }
 
   // ─── Private: Run Lifecycle ──────────────────────────────────
-
-  private async rotateAgent(agentId: string): Promise<void> {
-    if (this.isCoolingDown()) throw new Error(`token cooling down until ${this.cooldownUntil!.toISOString()}`)
-    const runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
-    const oldRun = this._runs.get(agentId)
-    this._runs.set(agentId, {
-      id: runId, agentId, startedAt: new Date(),
-      inflight: 0, requestCount: 0, finishing: false,
-    })
-    this.lastError = ''
-    if (oldRun) {
-      this.draining.push(oldRun)
-      this.finishIfReady(oldRun).catch(err => {
-        this.log(`${this.name}: finish rotated run ${oldRun.id} failed:`, err)
-      })
-    }
-  }
-
-  private async finishIfReady(run: ManagedRun): Promise<void> {
-    if (run.inflight > 0 || run.finishing) return
-    if (this._runs.get(run.agentId) === run) return
-    run.finishing = true
-    try {
-      await this.upstreamClient.finishRun(this.token, run.id, run.requestCount, this.proxyId)
-      this.draining = this.draining.filter(r => r !== run)
-    } catch (err) {
-      run.finishing = false
-      this.lastError = String(err)
-    }
-  }
+  // (Per-prompt runs are managed in acquire/completeRun/failRun above.
+  //  No cached-run rotation or draining needed.)
 }
 
 // ─── RunManager ────────────────────────────────────────────────

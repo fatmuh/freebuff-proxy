@@ -17,6 +17,12 @@ export interface Account {
   paused: boolean
   serve_status: ServeStatus
   account_status: AccountStatus
+  /** Stable per-account fingerprint (synthetic device profile). */
+  fingerprint_id?: string
+  /** Device info for ads API (derived from fingerprint profile). */
+  device_os?: string
+  device_timezone?: string
+  device_locale?: string
 }
 
 export interface ApiKeyEntry {

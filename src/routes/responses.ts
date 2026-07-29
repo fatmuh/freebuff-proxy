@@ -1,3 +1,4 @@
+import type { AdsSpoof } from '../ads-spoof.js'
 import type { Context } from 'hono'
 import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
@@ -25,6 +26,7 @@ export function handleResponses(
   poolManager: ModelPoolManager,
   db: DB,
   getApiKeyId: (apiKey: string) => string | null,
+  adsSpoof: AdsSpoof,
 ) {
   return async (c: Context) => {
     if (c.req.method !== 'POST') {
@@ -117,6 +119,7 @@ export function handleResponses(
         lease.run.id,
         lease.pool.currentSessionInstanceId(),
         lease.pool.sessionModel,
+        lease.pool.traceSessionId,
       )
 
       let statusCode: number
@@ -203,6 +206,11 @@ export function handleResponses(
           // Log after stream completion
           const donePromise = new Promise<void>((resolve) => {
             transform.on('finish', () => {
+              // Per-prompt run lifecycle: report step + FINISH after stream
+              void lease.pool.completeRun(lease.run, 0, null).catch(err => {
+                console.log(`[${lease.pool.name}] completeRun (stream) failed:`, err)
+              })
+              adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
               db.insertRequestLog({
                 created_at: new Date(startTime).toISOString(),
                 api_key: apiKey ?? null,
@@ -252,11 +260,21 @@ export function handleResponses(
           }
           let tokensIn: number | null = null
           let tokensOut: number | null = null
+          let messageId: string | null = null
           const usage = responsesBody.usage
           if (usage && typeof usage === 'object') {
             if ('input_tokens' in usage && typeof usage.input_tokens === 'number') tokensIn = usage.input_tokens
             if ('output_tokens' in usage && typeof usage.output_tokens === 'number') tokensOut = usage.output_tokens
           }
+          if (responsesBody.id && typeof responsesBody.id === 'string') messageId = responsesBody.id
+
+          // Per-prompt run lifecycle: report step + FINISH
+          const credits = (tokensOut ?? 0)
+          void lease.pool.completeRun(lease.run, credits, messageId).catch(err => {
+            console.log(`[${lease.pool.name}] completeRun failed:`, err)
+          })
+          // Fire-and-forget cli_chat ad fetch
+          adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
 
           db.insertRequestLog({
             created_at: new Date(startTime).toISOString(),

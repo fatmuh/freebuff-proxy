@@ -174,15 +174,51 @@ export class UpstreamClient {
     return runId
   }
 
-  async finishRun(authToken: string, runId: string, totalSteps: number, proxyId?: string): Promise<void> {
+  async finishRun(
+    authToken: string,
+    runId: string,
+    status: string,
+    totalSteps: number,
+    directCredits: number,
+    totalCredits: number,
+    errorMessage?: string,
+    proxyId?: string,
+  ): Promise<void> {
     const body = JSON.stringify({
-      action: 'FINISH', runId, status: 'completed',
-      totalSteps, directCredits: 0, totalCredits: 0,
+      action: 'FINISH', runId, status,
+      totalSteps, directCredits, totalCredits,
+      ...(errorMessage !== undefined && { errorMessage: errorMessage.slice(0, 5000) }),
     })
     const { statusCode, body: respBody } = await this.doPost(authToken, '/api/v1/agent-runs', body, proxyId)
     const text = await respBody.text()
     if (statusCode < 200 || statusCode >= 300) {
       throw new Error(`finish run failed: ${statusCode} ${text.trim()}`)
+    }
+  }
+
+  async addAgentStep(
+    authToken: string,
+    runId: string,
+    stepNumber: number,
+    credits: number,
+    childRunIds: string[],
+    messageId: string | null,
+    status: string,
+    startTime: string | null,
+    proxyId?: string,
+  ): Promise<void> {
+    const body = JSON.stringify({
+      stepNumber,
+      credits,
+      childRunIds,
+      messageId,
+      status,
+      ...(startTime !== null && { startTime }),
+    })
+    const { statusCode, body: respBody } = await this.doPost(authToken, `/api/v1/agent-runs/${runId}/steps`, body, proxyId)
+    const text = await respBody.text()
+    if (statusCode < 200 || statusCode >= 300) {
+      throw new Error(`addAgentStep failed: ${statusCode} ${text.trim()}`)
     }
   }
 
