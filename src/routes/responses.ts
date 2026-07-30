@@ -7,7 +7,7 @@ import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, isCountryBlockedError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
-import { blockFreeMode, getFreeModeBlockStatus, isFreeModeBlocked, parseFreeModeRetryMs } from '../free-mode-gate.js'
+import { parseFreeModeRetryMs } from '../free-mode-gate.js'
 import { resolveModelId } from '../types.js'
 import { convertResponsesToChat, buildResponseObject } from '../responses-converter.js'
 import { createResponsesTransform } from '../responses-stream.js'
@@ -53,14 +53,6 @@ export function handleResponses(
     const apiKey = c.get('apiKey') as string | undefined
     const isStream = body.stream !== false
 
-    // Global free-mode rate-limit block (memory only)
-    if (isFreeModeBlocked()) {
-      const gate = getFreeModeBlockStatus()
-      const mins = Math.max(1, Math.ceil(gate.remaining_ms / 60_000))
-      const msg = gate.message || `Free mode rate limit exceeded. Try again in ${mins} minutes.`
-      console.log(`[responses] free-mode blocked: remaining_ms=${gate.remaining_ms}`)
-      return openAIError(429, msg, 'rate_limit_error', 'free_mode_rate_limited')
-    }
 
     const startTime = Date.now()
     console.log(`[responses] incoming: model=${requestedModel} agentId=${agentId}`)
@@ -328,17 +320,13 @@ export function handleResponses(
 
       if (isRateLimitError(statusCode, errorBody)) {
         const retryMs = parseFreeModeRetryMs(errorBody) ?? 30 * 60_000
-        const gate = blockFreeMode(retryMs, errorBody.trim())
         console.log(
-          `${lease.pool.name}: free-mode rate limit — blocking proxy for ${gate.remaining_sec}s (until ${gate.until})`,
+          `${lease.pool.name}: free-mode rate limit — cooling account for ${Math.ceil(retryMs / 1000)}s and failing over`,
         )
+        poolManager.cooldown(lease, retryMs, errorBody.trim() || 'free-mode rate limited')
+        failedPools.add(lease.pool.name)
         poolManager.release(lease)
-        return openAIError(
-          429,
-          gate.message || errorBody.trim() || 'Free mode rate limit exceeded',
-          'rate_limit_error',
-          'free_mode_rate_limited',
-        )
+        continue
       }
 
       if (isQuotaError(statusCode, errorBody)) {
