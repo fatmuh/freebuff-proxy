@@ -69,6 +69,7 @@ export function createHonoApp(
   })
 
   app.get('/api/models', handleModelsList(registry))
+  app.get('/v1/models', handleModels(registry, startedAt))
   app.all('/v1/chat/completions', handleChatCompletions(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey), adsSpoof))
   app.post('/v1/responses', handleResponses(registry, poolManager, db, (apiKey) => auth.getApiKeyId(apiKey), adsSpoof))
 
