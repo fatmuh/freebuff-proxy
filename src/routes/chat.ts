@@ -393,6 +393,8 @@ export function injectUpstreamMetadata(
   const cloned = JSON.parse(JSON.stringify(payload))
   cloned.model = poolModel
   normalizeImageContentParts(cloned)
+  normalizeReasoningEffort(cloned)
+
 
   // Inject the CLI "Buffy" system prompt so Codebuff API doesn't reject with "only allowed in cli"
   const messages = Array.isArray(cloned.messages)
@@ -416,6 +418,28 @@ export function injectUpstreamMetadata(
   cloned.codebuff_metadata = metadata
 
   return JSON.stringify(cloned)
+}
+
+/**
+ * Freebuff's Chat Completions API accepts `reasoning_effort`; its internal
+ * Responses bridge derives `reasoning.effort` from that field. Forwarding both
+ * representations makes the bridge reject a request when their values differ.
+ */
+function normalizeReasoningEffort(payload: Record<string, unknown>): void {
+  const nestedReasoning = isRecord(payload.reasoning) ? payload.reasoning : undefined
+  const nestedEffort = nestedReasoning?.effort
+  const dottedEffort = payload['reasoning.effort']
+
+  if (payload.reasoning_effort === undefined) {
+    if (typeof nestedEffort === 'string') {
+      payload.reasoning_effort = nestedEffort
+    } else if (typeof dottedEffort === 'string') {
+      payload.reasoning_effort = dottedEffort
+    }
+  }
+
+  delete payload.reasoning
+  delete payload['reasoning.effort']
 }
 
 function normalizeImageContentParts(payload: Record<string, unknown>): void {
