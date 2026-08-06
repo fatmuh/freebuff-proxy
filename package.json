@@ -27,7 +27,6 @@
   "dependencies": {
     "@hono/node-server": "^1.13.0",
     "@solidjs/router": "^0.16.1",
-    "better-sqlite3": "^12.9.0",
     "dotenv": "^17.4.2",
     "hono": "^4.7.0",
     "socks": "^2.8.9",
@@ -48,5 +47,11 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "optionalDependencies": {
+    "better-sqlite3": "^12.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }
