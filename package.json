@@ -48,9 +48,7 @@
   "files": [
     "dist"
   ],
-  "optionalDependencies": {
-    "better-sqlite3": "^12.9.0"
-  },
+  "optionalDependencies": {},
   "engines": {
     "node": ">=22"
   }
