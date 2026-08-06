@@ -11,7 +11,8 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-RUN mkdir -p data
+RUN chmod +x entrypoint.sh && mkdir -p data
+
 EXPOSE 9187
 
-CMD ["node", "dist/cli.js"]
+CMD ["./entrypoint.sh"]
