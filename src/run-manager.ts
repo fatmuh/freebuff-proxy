@@ -351,12 +351,11 @@ export class TokenPool {
     const instanceId = await this.ensureSession()
     if (verbose) this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
 
-    // Per-prompt run: START a fresh run for every incoming request.
-    // The real CLI does one START → steps → FINISH per user prompt.
-    if (verbose) this.log(`${this.name}: starting run for agent=${agentId}`)
-    const runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
+    // Session API: no per-prompt run needed. The instance ID from the session
+    // is passed as x-freebuff-instance-id header on the chat request.
+    // Use a dummy run ID for DB logging / lease tracking only.
     const run: ManagedRun = {
-      id: runId,
+      id: `session-${instanceId ?? 'unknown'}`,
       agentId,
       startedAt: new Date(),
       inflight: 1,

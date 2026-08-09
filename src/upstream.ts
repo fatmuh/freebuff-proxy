@@ -237,18 +237,23 @@ export class UpstreamClient {
 
   // ─── Chat Completions ────────────────────────────────────────
 
-  async chatCompletions(authToken: string, body: string, proxyId?: string): Promise<Dispatcher.ResponseData> {
+  async chatCompletions(authToken: string, body: string, proxyId?: string, instanceId?: string): Promise<Dispatcher.ResponseData> {
     const url = this.buildURL('/api/v1/chat/completions', proxyId)
+    const headers: Record<string, string> = {
+      'authorization': `Bearer ${authToken}`,
+      'content-type': 'application/json',
+      'accept': '*/*',
+      'user-agent': this.getChatUserAgent(),
+      'connection': 'keep-alive',
+    }
+    // New session API: send instance ID as header, not in body
+    if (instanceId) {
+      headers['x-freebuff-instance-id'] = instanceId
+    }
     return request(url, {
       ...this.baseOpts(proxyId),
       method: 'POST',
-      headers: {
-        'authorization': `Bearer ${authToken}`,
-        'content-type': 'application/json',
-        'accept': '*/*',
-        'user-agent': this.getChatUserAgent(),
-        'connection': 'keep-alive',
-      },
+      headers,
       body,
     } as ReqOpts) as Promise<Dispatcher.ResponseData>
   }

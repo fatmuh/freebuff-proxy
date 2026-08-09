@@ -93,13 +93,14 @@ export function handleChatCompletions(
         )
       }
 
-      console.log(`[${lease.pool.name}] routing request (poolModel: ${lease.pool.sessionModel}) via run: ${lease.run.id}`)
+      const instanceId = lease.pool.currentSessionInstanceId()
+      console.log(`[${lease.pool.name}] routing request (poolModel: ${lease.pool.sessionModel}) via session: ${instanceId ?? 'none'}`)
 
       const upstreamBody = injectUpstreamMetadata(
         payload,
         requestedModel,
         lease.run.id,
-        lease.pool.currentSessionInstanceId(),
+        instanceId,
         lease.pool.sessionModel,
         lease.pool.traceSessionId,
       )
@@ -112,6 +113,7 @@ export function handleChatCompletions(
           lease.pool.token,
           upstreamBody,
           lease.pool.proxyId || undefined,
+          instanceId || undefined,
         )
         statusCode = resp.statusCode
         headers = resp.headers as Record<string, string | string[] | undefined>
@@ -136,8 +138,7 @@ export function handleChatCompletions(
           error: `upstream network error: ${detail}`.slice(0, 500),
           is_stream: isStream ? 1 : 0,
         })
-        // Per-prompt run: FINISH with failed status on network error
-        void lease.pool.failRun(lease.run, 'failed', `network error: ${detail}`).catch(() => {})
+        // Session API: no run lifecycle to fail
         lastUpstreamStatus = 502
         lastUpstreamError = `upstream network error: ${detail}`
         lastUpstreamAccount = lease.pool.name
@@ -179,11 +180,7 @@ export function handleChatCompletions(
           void donePromise.then(() => {
             const tIn = tokensIn()
             const tOut = tokensOut()
-            // Per-prompt run lifecycle: report step + FINISH after stream completes
-            const credits = tOut ?? 0
-            void lease.pool.completeRun(lease.run, credits, null).catch(err => {
-              console.log(`[${lease.pool.name}] completeRun (stream) failed:`, err)
-            })
+            // Session API: no run lifecycle to complete
             // Fire-and-forget cli_chat ad fetch with fake conversation
             adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
             db.insertRequestLog({
@@ -225,11 +222,7 @@ export function handleChatCompletions(
             if (json.id) messageId = json.id
           } catch { /* not JSON or no usage field */ }
 
-          // Per-prompt run lifecycle: report step + FINISH
-          const credits = (tokensOut ?? 0)
-          void lease.pool.completeRun(lease.run, credits, messageId).catch(err => {
-            console.log(`[${lease.pool.name}] completeRun failed:`, err)
-          })
+          // Session API: no run lifecycle to complete
 
           // Fire-and-forget cli_chat ad fetch with fake conversation
           adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
@@ -281,8 +274,8 @@ export function handleChatCompletions(
         is_stream: isStream ? 1 : 0,
       })
 
-      // Per-prompt run: FINISH with failed status on non-2xx
-      void lease.pool.failRun(lease.run, 'failed', rawError).catch(() => {})
+      // Session API: no run lifecycle to fail
+      // (failRun was here)
 
       if (isRateLimitError(statusCode, errorBody)) {
         const retryMs = parseFreeModeRetryMs(errorBody) ?? 30 * 60_000

@@ -99,7 +99,8 @@ export function handleResponses(
         )
       }
 
-      console.log(`[${lease.pool.name}] routing responses request (poolModel: ${lease.pool.sessionModel}) via run: ${lease.run.id}`)
+      const instanceId = lease.pool.currentSessionInstanceId()
+      console.log(`[${lease.pool.name}] routing responses request (poolModel: ${lease.pool.sessionModel}) via session: ${instanceId ?? 'none'}`)
 
       // Convert Responses API → Chat Completions
       const chatPayload = convertResponsesToChat(body)
@@ -109,7 +110,7 @@ export function handleResponses(
         chatPayload,
         requestedModel,
         lease.run.id,
-        lease.pool.currentSessionInstanceId(),
+        instanceId,
         lease.pool.sessionModel,
         lease.pool.traceSessionId,
       )
@@ -122,6 +123,7 @@ export function handleResponses(
           lease.pool.token,
           upstreamBody,
           lease.pool.proxyId || undefined,
+          instanceId || undefined,
         )
         statusCode = resp.statusCode
         headers = resp.headers as Record<string, string | string[] | undefined>
@@ -198,10 +200,7 @@ export function handleResponses(
           // Log after stream completion
           const donePromise = new Promise<void>((resolve) => {
             transform.on('finish', () => {
-              // Per-prompt run lifecycle: report step + FINISH after stream
-              void lease.pool.completeRun(lease.run, 0, null).catch(err => {
-                console.log(`[${lease.pool.name}] completeRun (stream) failed:`, err)
-              })
+              // Session API: no run lifecycle to complete
               adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
               db.insertRequestLog({
                 created_at: new Date(startTime).toISOString(),
@@ -260,11 +259,7 @@ export function handleResponses(
           }
           if (responsesBody.id && typeof responsesBody.id === 'string') messageId = responsesBody.id
 
-          // Per-prompt run lifecycle: report step + FINISH
-          const credits = (tokensOut ?? 0)
-          void lease.pool.completeRun(lease.run, credits, messageId).catch(err => {
-            console.log(`[${lease.pool.name}] completeRun failed:`, err)
-          })
+          // Session API: no run lifecycle to complete
           // Fire-and-forget cli_chat ad fetch
           adsSpoof?.maybeFireChat(lease.pool.name, lease.pool.token, lease.pool.proxyId || undefined)
 
