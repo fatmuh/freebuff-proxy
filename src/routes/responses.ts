@@ -377,6 +377,18 @@ export function handleResponses(
       if (statusCode === 401) {
         poolManager.cooldown(lease, 30 * 60_000, 'upstream auth rejected token')
         lease.pool.invalidateSession('upstream auth rejected token')
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
+      }
+
+      // Generic 5xx (502/503/504) — failover to next account instead of returning error to client
+      if (statusCode >= 500) {
+        console.log(`[${lease.pool.name}] upstream ${statusCode}, failing over to next account`)
+        poolManager.cooldown(lease, 30_000, `upstream ${statusCode}`)
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
       }
 
       poolManager.release(lease)
