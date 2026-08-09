@@ -278,9 +278,12 @@ export function handleChatCompletions(
       // (failRun was here)
 
       if (isRateLimitError(statusCode, errorBody)) {
-        const retryMs = parseFreeModeRetryMs(errorBody) ?? 30 * 60_000
+        // Free-mode rate limit: 6 sessions/hour per account.
+        // Don't invalidate session — it's still valid, just usage-limited.
+        // Cooldown for 10 min (not 30) so the account recovers faster.
+        const retryMs = Math.min(parseFreeModeRetryMs(errorBody) ?? 10 * 60_000, 10 * 60_000)
         console.log(
-          `${lease.pool.name}: free-mode rate limit — cooling account for ${Math.ceil(retryMs / 1000)}s and failing over`,
+          `${lease.pool.name}: free-mode rate limit — cooling ${Math.ceil(retryMs / 1000)}s (session kept alive), failing over`,
         )
         poolManager.cooldown(lease, retryMs, errorBody.trim() || 'free-mode rate limited')
         failedPools.add(lease.pool.name)
