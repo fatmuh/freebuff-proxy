@@ -418,7 +418,9 @@ export function injectUpstreamMetadata(
   metadata.cost_mode = 'free'
   metadata.client_id = generateClientSessionId()
   metadata.trace_session_id = traceSessionId
-  // Session API: instance ID is sent as x-freebuff-instance-id header, NOT in body
+  if (sessionInstanceId) {
+    metadata.freebuff_instance_id = sessionInstanceId
+  }
   cloned.codebuff_metadata = metadata
 
   return JSON.stringify(cloned)
