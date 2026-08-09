@@ -33,4 +33,28 @@ EOF
   ) &
 fi
 
+# Auto-register second Webshare account proxies (WS2 prefix)
+if [ -n "$WEBSHARE2_PROXY_HOSTS" ] && [ -n "$WEBSHARE2_USER" ]; then
+  echo "[entrypoint] registering Webshare2 proxies..."
+  (
+    sleep 12
+    idx=11
+    IFS=','
+    for entry in $WEBSHARE2_PROXY_HOSTS; do
+      IFS=':' read host port country <<EOF
+$entry
+EOF
+      if [ -n "$host" ] && [ -n "$port" ]; then
+        curl -s -X POST "http://localhost:9187/api/proxies" \
+          -H "Authorization: Bearer ${PROXY_API_KEY:-moccilabs-freebuff-2026}" \
+          -H "Content-Type: application/json" \
+          -d "{\"id\":\"proxy-$idx\",\"name\":\"WS2 ${country:-??}\",\"type\":\"http\",\"host\":\"$host\",\"port\":${port},\"username\":\"$WEBSHARE2_USER\",\"password\":\"${WEBSHARE2_PASS:-}\"}" \
+          > /dev/null 2>&1 && echo "[entrypoint] registered proxy-$idx WS2 $host:$port" || true
+        idx=$((idx + 1))
+      fi
+    done
+    echo "[entrypoint] Webshare2 proxy registration complete"
+  ) &
+fi
+
 exec node dist/cli.js
