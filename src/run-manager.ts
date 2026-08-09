@@ -351,11 +351,12 @@ export class TokenPool {
     const instanceId = await this.ensureSession()
     if (verbose) this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
 
-    // Session API: no per-prompt run needed. The instance ID from the session
-    // is passed as x-freebuff-instance-id header on the chat request.
-    // Use a dummy run ID for DB logging / lease tracking only.
+    // Session API: still need a run_id for codebuff_metadata (API requires it),
+    // but the session instanceId is sent as header for authentication.
+    if (verbose) this.log(`${this.name}: starting run for agent=${agentId}`)
+    const runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
     const run: ManagedRun = {
-      id: `session-${instanceId ?? 'unknown'}`,
+      id: runId,
       agentId,
       startedAt: new Date(),
       inflight: 1,

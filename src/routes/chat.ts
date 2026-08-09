@@ -414,11 +414,11 @@ export function injectUpstreamMetadata(
   }
 
   let metadata = (cloned.codebuff_metadata ?? {}) as Record<string, unknown>
+  metadata.run_id = runId
   metadata.cost_mode = 'free'
   metadata.client_id = generateClientSessionId()
   metadata.trace_session_id = traceSessionId
   // Session API: instance ID is sent as x-freebuff-instance-id header, NOT in body
-  // run_id is no longer used — session API doesn't have per-prompt runs
   cloned.codebuff_metadata = metadata
 
   return JSON.stringify(cloned)
