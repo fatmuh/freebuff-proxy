@@ -92,6 +92,7 @@ export class UpstreamClient {
   private getChatUserAgent: () => string
   private defaultDispatcher: Dispatcher
   private proxyDispatchers = new Map<string, Dispatcher>()
+  private relayBaseURLs = new Map<string, string>()
   private requestTimeout: number
 
   constructor(baseURL: string, requestTimeout: number, sessionUserAgent = BUN_USER_AGENT_FALLBACK) {
@@ -133,6 +134,17 @@ export class UpstreamClient {
 
   // Register or update a proxy dispatcher for a proxy entry
   registerProxy(proxy: ProxyEntry): void {
+    // Relay type: store relay URL, use default dispatcher (no CONNECT proxy)
+    if (proxy.type === 'relay') {
+      const existing = this.proxyDispatchers.get(proxy.id)
+      if (existing) {
+        try { existing.close() } catch { /* ignore */ }
+        this.proxyDispatchers.delete(proxy.id)
+      }
+      this.relayBaseURLs.set(proxy.id, proxy.host.replace(/\/+$/, ''))
+      return
+    }
+    this.relayBaseURLs.delete(proxy.id)
     const existing = this.proxyDispatchers.get(proxy.id)
     if (existing) {
       try { existing.close() } catch { /* ignore */ }
@@ -142,6 +154,7 @@ export class UpstreamClient {
 
   // Remove a proxy dispatcher
   unregisterProxy(proxyId: string): void {
+    this.relayBaseURLs.delete(proxyId)
     const existing = this.proxyDispatchers.get(proxyId)
     if (existing) {
       try { existing.close() } catch { /* ignore */ }
@@ -225,7 +238,7 @@ export class UpstreamClient {
   // ─── Chat Completions ────────────────────────────────────────
 
   async chatCompletions(authToken: string, body: string, proxyId?: string): Promise<Dispatcher.ResponseData> {
-    const url = this.buildURL('/api/v1/chat/completions')
+    const url = this.buildURL('/api/v1/chat/completions', proxyId)
     return request(url, {
       ...this.baseOpts(proxyId),
       method: 'POST',
@@ -243,7 +256,7 @@ export class UpstreamClient {
   // ─── Session Management ──────────────────────────────────────
 
   async createSession(authToken: string, model: string, proxyId?: string): Promise<FreeSessionResponse> {
-    const url = this.buildURL('/api/v1/freebuff/session')
+    const url = this.buildURL('/api/v1/freebuff/session', proxyId)
     const { statusCode, body } = await request(url, {
       ...this.baseOpts(proxyId),
       method: 'POST',
@@ -258,7 +271,7 @@ export class UpstreamClient {
   }
 
   async getSession(authToken: string, instanceId: string, proxyId?: string): Promise<FreeSessionResponse> {
-    const url = this.buildURL('/api/v1/freebuff/session')
+    const url = this.buildURL('/api/v1/freebuff/session', proxyId)
     const { statusCode, body } = await request(url, {
       ...this.baseOpts(proxyId),
       method: 'GET',
@@ -274,7 +287,7 @@ export class UpstreamClient {
 
   /** Read the raw upstream session response for dashboard diagnostics. */
   async inspectSession(authToken: string, instanceId: string, proxyId?: string): Promise<{ statusCode: number; body: string }> {
-    const url = this.buildURL('/api/v1/freebuff/session')
+    const url = this.buildURL('/api/v1/freebuff/session', proxyId)
     const { statusCode, body } = await request(url, {
       ...this.baseOpts(proxyId),
       method: 'GET',
@@ -289,7 +302,7 @@ export class UpstreamClient {
   }
 
   async endSession(authToken: string, proxyId?: string): Promise<void> {
-    const url = this.buildURL('/api/v1/freebuff/session')
+    const url = this.buildURL('/api/v1/freebuff/session', proxyId)
     const { statusCode, body } = await request(url, {
       ...this.baseOpts(proxyId),
       method: 'DELETE',
@@ -323,7 +336,10 @@ export class UpstreamClient {
 
   // ─── Private Helpers ─────────────────────────────────────────
 
-  private buildURL(path: string): string {
+  private buildURL(path: string, proxyId?: string): string {
+    if (proxyId && this.relayBaseURLs.has(proxyId)) {
+      return `${this.relayBaseURLs.get(proxyId)}${path}`
+    }
     return `${this.baseURL}${path}`
   }
 
@@ -337,7 +353,7 @@ export class UpstreamClient {
     body: string,
     proxyId?: string,
   ): Promise<{ statusCode: number; body: Dispatcher.ResponseData['body'] }> {
-    const url = this.buildURL(path)
+    const url = this.buildURL(path, proxyId)
     const result = await request(url, {
       ...this.baseOpts(proxyId),
       method: 'POST',

@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
 
 // Proxy types supported by the system
-export type ProxyType = 'http' | 'socks5'
+export type ProxyType = 'http' | 'socks5' | 'relay'
 
 export interface ProxyEntry {
   id: string
@@ -31,6 +31,7 @@ export function proxyUrl(entry: ProxyEntry): string {
 
 // Strip credentials for safe display
 export function proxyUrlSafe(entry: ProxyEntry): string {
+  if (entry.type === 'relay') return entry.host
   const scheme = entry.type === 'socks5' ? 'socks5' : 'http'
   return `${scheme}://${entry.host}:${entry.port}`
 }

@@ -23,13 +23,14 @@ interface UpdateProxyBody {
 }
 
 function validateProxyBody(body: CreateProxyBody | UpdateProxyBody): string | null {
-  if (body.type && body.type !== 'http' && body.type !== 'socks5') {
-    return 'type must be "http" or "socks5"'
+  if (body.type && body.type !== 'http' && body.type !== 'socks5' && body.type !== 'relay') {
+    return 'type must be "http", "socks5", or "relay"'
   }
   if (body.host !== undefined && !body.host.trim()) {
     return 'host cannot be empty'
   }
-  if (body.port !== undefined && (body.port < 1 || body.port > 65535)) {
+  // Relay uses URL as host (e.g. https://...) — skip port validation
+  if (body.type !== 'relay' && body.port !== undefined && (body.port < 1 || body.port > 65535)) {
     return 'port must be between 1 and 65535'
   }
   return null
@@ -65,8 +66,11 @@ export function handleProxiesCreate(proxyStore: ProxyStore, upstreamClient: Upst
     const validation = validateProxyBody(body)
     if (validation) return c.json({ error: validation }, 400)
 
-    if (!body.host || !body.port || !body.type) {
-      return c.json({ error: 'host, port, and type are required' }, 400)
+    if (!body.host || !body.type) {
+      return c.json({ error: 'host and type are required' }, 400)
+    }
+    if (body.type !== 'relay' && !body.port) {
+      return c.json({ error: 'port is required for non-relay proxies' }, 400)
     }
 
     const id = `proxy-${proxyStore.nextId()}`
