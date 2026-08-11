@@ -1,60 +1,55 @@
 #!/bin/sh
 set -e
 
-# Inject auth.json from base64 env var
+API_KEY="${PROXY_API_KEY:-moccilabs-freebuff-2026}"
+
+# Inject auth.json from base64 env var, then patch proxy_id assignments to DO proxies
 if [ -n "$AUTH_JSON_B64" ]; then
   mkdir -p data
   echo "$AUTH_JSON_B64" | base64 -d > data/auth.json
   echo "[entrypoint] auth.json injected"
 fi
 
-# Auto-register Webshare proxies on startup
-# Set WEBSHARE_PROXY_HOSTS="host1:port1:country1,host2:port2:country2,..."
-# Set WEBSHARE_USER and WEBSHARE_PASS
-if [ -n "$WEBSHARE_PROXY_HOSTS" ] && [ -n "$WEBSHARE_USER" ]; then
-  echo "[entrypoint] registering Webshare proxies..."
-  # Wait for server to be ready, then register via API
-  (
-    sleep 10
-    IFS=','
-    for entry in $WEBSHARE_PROXY_HOSTS; do
-      IFS=':' read host port country <<EOF
-$entry
-EOF
-      if [ -n "$host" ] && [ -n "$port" ]; then
-        curl -s -X POST "http://localhost:9187/api/proxies" \
-          -H "Authorization: Bearer ${PROXY_API_KEY:-moccilabs-freebuff-2026}" \
-          -H "Content-Type: application/json" \
-          -d "{\"name\":\"WS ${country:-??}\",\"type\":\"http\",\"host\":\"$host\",\"port\":${port},\"username\":\"$WEBSHARE_USER\",\"password\":\"${WEBSHARE_PASS:-}\"}" \
-          > /dev/null 2>&1 && echo "[entrypoint] registered $host:$port" || true
-      fi
-    done
-    echo "[entrypoint] Webshare proxy registration complete"
-  ) &
-fi
+# Patch auth.json: re-assign proxy_id round-robin to DO proxies (proxy-1, proxy-2, proxy-3)
+# This overrides stale Webshare proxy_id assignments from AUTH_JSON_B64
+node -e '
+const fs = require("fs");
+try {
+  const data = JSON.parse(fs.readFileSync("data/auth.json", "utf8"));
+  if (data.accounts && Array.isArray(data.accounts)) {
+    data.accounts.forEach((acc, i) => {
+      acc.proxy_id = "proxy-" + ((i % 3) + 1);
+    });
+    fs.writeFileSync("data/auth.json", JSON.stringify(data, null, 2));
+    console.log("[entrypoint] patched proxy_id for " + data.accounts.length + " accounts");
+  }
+} catch (e) {
+  console.error("[entrypoint] failed to patch auth.json:", e.message);
+}
+'
 
-# Auto-register second Webshare account proxies (WS2 prefix)
-if [ -n "$WEBSHARE2_PROXY_HOSTS" ] && [ -n "$WEBSHARE2_USER" ]; then
-  echo "[entrypoint] registering Webshare2 proxies..."
-  (
-    sleep 12
-    idx=11
-    IFS=','
-    for entry in $WEBSHARE2_PROXY_HOSTS; do
-      IFS=':' read host port country <<EOF
+# Register DigitalOcean proxies on startup
+(
+  sleep 8
+  echo "[entrypoint] registering DO proxies..."
+  DO_USER="${DO_PROXY_USER:-fb}"
+  DO_PASS="${DO_PROXY_PASS:-269c809c3c4ce873}"
+  idx=1
+  IFS=','
+  for entry in "157.230.247.151:3128:DO-SGP1-1" "159.223.32.16:3128:DO-SGP1-2" "104.131.38.73:3128:DO-NYC3-3"; do
+    IFS=':' read host port name <<EOF
 $entry
 EOF
-      if [ -n "$host" ] && [ -n "$port" ]; then
-        curl -s -X POST "http://localhost:9187/api/proxies" \
-          -H "Authorization: Bearer ${PROXY_API_KEY:-moccilabs-freebuff-2026}" \
-          -H "Content-Type: application/json" \
-          -d "{\"id\":\"proxy-$idx\",\"name\":\"WS2 ${country:-??}\",\"type\":\"http\",\"host\":\"$host\",\"port\":${port},\"username\":\"$WEBSHARE2_USER\",\"password\":\"${WEBSHARE2_PASS:-}\"}" \
-          > /dev/null 2>&1 && echo "[entrypoint] registered proxy-$idx WS2 $host:$port" || true
-        idx=$((idx + 1))
-      fi
-    done
-    echo "[entrypoint] Webshare2 proxy registration complete"
-  ) &
-fi
+    if [ -n "$host" ] && [ -n "$port" ]; then
+      curl -s -X POST "http://localhost:9187/api/proxies" \
+        -H "Authorization: Bearer $API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "{\"id\":\"proxy-$idx\",\"name\":\"$name\",\"type\":\"http\",\"host\":\"$host\",\"port\":${port},\"username\":\"$DO_USER\",\"password\":\"$DO_PASS\"}" \
+        > /dev/null 2>&1 && echo "[entrypoint] registered proxy-$idx $name $host:$port" || true
+      idx=$((idx + 1))
+    fi
+  done
+  echo "[entrypoint] DO proxy registration complete"
+) &
 
 exec node dist/cli.js
