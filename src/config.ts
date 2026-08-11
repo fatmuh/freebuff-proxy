@@ -29,7 +29,7 @@ const DEFAULTS = {
   ROTATION_INTERVAL: '6h',
   REQUEST_TIMEOUT: '15m',
   HTTP_PROXY: '',
-  SESSION_IDLE_TIMEOUT: '10m',
+  SESSION_IDLE_TIMEOUT: '50m',
 }
 
 export function loadConfig(): Config {
