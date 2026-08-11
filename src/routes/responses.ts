@@ -65,7 +65,7 @@ export function handleResponses(
     let lastUpstreamRunId: string | null = null
 
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 15; attempt++) {
       const { lease, reason: acquireReason } = await poolManager.acquire(
         requestedModel,
         agentId,
