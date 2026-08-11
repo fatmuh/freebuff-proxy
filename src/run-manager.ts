@@ -13,6 +13,11 @@ const SESSION_RETRY_DELAY = 10_000
 const MAX_MODEL_LOCKED_RETRIES = 5
 const SESSION_EXPIRY_BUFFER = 5_000
 
+/** How long a cached run_id is considered reusable (ms).
+ *  Codebuff runs persist server-side; reusing the same run_id across
+ *  multiple chat completions avoids burning the daily START quota. */
+const RUN_CACHE_TTL = 10 * 60_000 // 10 min
+
 // ─── Persisted Session State ───────────────────────────────────
 
 interface SavedSessionState {
@@ -44,6 +49,9 @@ export class TokenPool {
   private stateFile: string
   /** Per-prompt runs (empty — runs are created in acquire, completed in completeRun). */
   private _runs = new Map<string, ManagedRun>()
+  /** Cached run_id per agentId — avoids burning daily START quota on every request.
+   *  Key: agentId, Value: { runId, createdAt } */
+  private _runCache = new Map<string, { runId: string, createdAt: number }>()
   private draining: ManagedRun[] = []
   session: CachedSession | null = null
   private sessionRefreshPromise: Promise<string | null> | null = null
@@ -351,10 +359,21 @@ export class TokenPool {
     const instanceId = await this.ensureSession()
     if (verbose) this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
 
-    // Session API: still need a run_id for codebuff_metadata (API requires it),
-    // but the session instanceId is sent as header for authentication.
-    if (verbose) this.log(`${this.name}: starting run for agent=${agentId}`)
-    const runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
+    // ─── Run ID Caching ───────────────────────────────────────────
+    // Codebuff counts START calls against the daily/hourly quota.
+    // Reuse the same run_id across requests within the TTL window,
+    // exactly like the real CLI does (one run per conversation).
+    let runId: string
+    const cached = this._runCache.get(agentId)
+    if (cached && Date.now() - cached.createdAt < RUN_CACHE_TTL) {
+      if (verbose) this.log(`${this.name}: ♻️ reusing cached run ${cached.runId} for agent=${agentId}`)
+      runId = cached.runId
+    } else {
+      if (verbose) this.log(`${this.name}: starting new run for agent=${agentId}`)
+      runId = await this.upstreamClient.startRun(this.token, agentId, this.proxyId)
+      this._runCache.set(agentId, { runId, createdAt: Date.now() })
+    }
+
     const run: ManagedRun = {
       id: runId,
       agentId,
@@ -365,6 +384,11 @@ export class TokenPool {
     }
     this.lastError = ''
     return { pool: this, run, model }
+  }
+
+  /** Invalidate cached run_id for an agent (call when upstream rejects it). */
+  invalidateRunCache(agentId: string): void {
+    this._runCache.delete(agentId)
   }
 
   /** Report a step and FINISH the run — called after a successful chat completion.

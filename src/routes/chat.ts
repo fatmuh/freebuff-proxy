@@ -333,6 +333,7 @@ export function handleChatCompletions(
 
       if (isRunInvalid(statusCode, errorBody)) {
         console.log(`${lease.pool.name}: run ${lease.run.id} invalid, rotating and retrying`)
+        lease.pool.invalidateRunCache(lease.run.agentId)
         poolManager.invalidate(lease, errorBody.trim())
         failedPools.add(lease.pool.name)
         poolManager.release(lease)
