@@ -3,15 +3,16 @@ set -e
 
 API_KEY="${PROXY_API_KEY:-moccilabs-freebuff-2026}"
 
-# Inject auth.json from base64 env var, then patch proxy_id assignments to DO proxies
+# Inject auth.json from base64 env var, then patch proxy_id + session_model
 if [ -n "$AUTH_JSON_B64" ]; then
   mkdir -p data
   echo "$AUTH_JSON_B64" | base64 -d > data/auth.json
   echo "[entrypoint] auth.json injected"
 fi
 
-# Patch auth.json: re-assign proxy_id round-robin to DO proxies (proxy-1 through proxy-10)
-# This overrides stale Webshare proxy_id assignments from AUTH_JSON_B64
+# Patch auth.json: 
+# 1. Re-assign proxy_id round-robin to DO proxies (proxy-1 through proxy-10)
+# 2. Set ALL accounts to deepseek/deepseek-v4-flash (the model we actually use)
 node -e '
 const fs = require("fs");
 try {
@@ -19,9 +20,10 @@ try {
   if (data.accounts && Array.isArray(data.accounts)) {
     data.accounts.forEach((acc, i) => {
       acc.proxy_id = "proxy-" + ((i % 10) + 1);
+      acc.session_model = "deepseek/deepseek-v4-flash";
     });
     fs.writeFileSync("data/auth.json", JSON.stringify(data, null, 2));
-    console.log("[entrypoint] patched proxy_id for " + data.accounts.length + " accounts across 10 DO proxies");
+    console.log("[entrypoint] patched " + data.accounts.length + " accounts: proxy_id round-robin + session_model=flash");
   }
 } catch (e) {
   console.error("[entrypoint] failed to patch auth.json:", e.message);
@@ -35,7 +37,6 @@ try {
   DO_USER="${DO_PROXY_USER:-fb}"
   DO_PASS="${DO_PROXY_PASS:-269c809c3c4ce873}"
   idx=1
-  IFS=','
   for entry in \
     "157.230.247.151:3128:DO-SGP1-1" \
     "159.223.32.16:3128:DO-SGP1-2" \
@@ -56,7 +57,7 @@ EOF
         -H "Authorization: Bearer $API_KEY" \
         -H "Content-Type: application/json" \
         -d "{\"id\":\"proxy-$idx\",\"name\":\"$name\",\"type\":\"http\",\"host\":\"$host\",\"port\":${port},\"username\":\"$DO_USER\",\"password\":\"$DO_PASS\"}" \
-        > /dev/null 2>&1 && echo "[entrypoint] registered proxy-$idx $name $host:$port" || true
+        > /dev/null 2>&1 && echo "[entrypoint] registered proxy-$idx $name" || true
       idx=$((idx + 1))
     fi
   done
