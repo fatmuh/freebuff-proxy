@@ -7,7 +7,7 @@ import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
 import { normalizeToolSchemas } from '../schema-normalize.js'
 import { BUFFY_SYSTEM_PROMPT } from '../system-prompt.js'
-import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, isCountryBlockedError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isDailyQuotaExhausted, msUntilNextDay, isAccountBannedError, isCountryBlockedError, extractUpstreamError, generateClientSessionId, sanitizeBodyText, readDecompressedBody } from '../utils.js'
 import { parseFreeModeRetryMs } from '../free-mode-gate.js'
 import { resolveModelId } from '../types.js'
 
@@ -276,6 +276,18 @@ export function handleChatCompletions(
 
       // Session API: no run lifecycle to fail
       // (failRun was here)
+
+      // Daily quota exhaustion → cooldown until next UTC midnight (not 10 min!)
+      if (isDailyQuotaExhausted(statusCode, errorBody)) {
+        const dayMs = msUntilNextDay()
+        console.log(
+          `${lease.pool.name}: daily quota exhausted — cooling ${Math.ceil(dayMs / 1000)}s until UTC midnight, failing over`,
+        )
+        poolManager.cooldown(lease, dayMs, errorBody.trim() || 'daily quota exhausted')
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
+      }
 
       if (isRateLimitError(statusCode, errorBody)) {
         // Free-mode rate limit: 6 sessions/hour per account.

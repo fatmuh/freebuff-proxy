@@ -112,7 +112,24 @@ export function isQuotaError(statusCode: number, errorBody: string): boolean {
 export function isRateLimitError(statusCode: number, errorBody: string): boolean {
   if (statusCode !== 429) return false
   const lower = errorBody.toLowerCase()
+  // Daily quota exhaustion is NOT a short-window rate limit — it's a daily cap.
+  // Handle separately via isDailyQuotaExhausted() with a 24h cooldown.
+  if (lower.includes('free-models-per-day')) return false
   return lower.includes('free_mode_rate_limited') || lower.includes('rate limit exceeded')
+}
+
+/** Daily quota exhaustion (free-models-per-day) → cooldown until next day, not 10 min. */
+export function isDailyQuotaExhausted(statusCode: number, errorBody: string): boolean {
+  if (statusCode !== 429) return false
+  const lower = errorBody.toLowerCase()
+  return lower.includes('free-models-per-day')
+}
+
+/** Calculate ms until next UTC midnight (Codebuff daily reset). */
+export function msUntilNextDay(): number {
+  const now = new Date()
+  const tomorrow = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0))
+  return tomorrow.getTime() - now.getTime()
 }
 
 /** Freebuff account permanently banned (not country_blocked). */
