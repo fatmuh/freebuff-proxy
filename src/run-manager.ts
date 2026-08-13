@@ -16,7 +16,7 @@ const SESSION_EXPIRY_BUFFER = 5_000
 /** How long a cached run_id is considered reusable (ms).
  *  Codebuff runs persist server-side; reusing the same run_id across
  *  multiple chat completions avoids burning the daily START quota. */
-const RUN_CACHE_TTL = 10 * 60_000 // 10 min
+const RUN_CACHE_TTL = 3 * 60_000 // 3 min — Codebuff runs expire fast, refresh sooner
 
 // ─── Persisted Session State ───────────────────────────────────
 
