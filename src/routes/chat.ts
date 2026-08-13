@@ -278,11 +278,15 @@ export function handleChatCompletions(
       // (failRun was here)
 
       // Daily quota exhaustion → cooldown until next UTC midnight (not 10 min!)
+      // Also kill the session to free up the IP slot for other accounts.
       if (isDailyQuotaExhausted(statusCode, errorBody)) {
         const dayMs = msUntilNextDay()
         console.log(
-          `${lease.pool.name}: daily quota exhausted — cooling ${Math.ceil(dayMs / 1000)}s until UTC midnight, failing over`,
+          `${lease.pool.name}: daily quota exhausted — cooling ${Math.ceil(dayMs / 1000)}s until UTC midnight, killing session to free IP slot, failing over`,
         )
+        lease.pool.invalidateSession('daily quota exhausted')
+        await lease.pool.endSessionNow().catch((err: unknown) => console.log(`${lease.pool.name}: endSession error: ${err}`))
+        lease.pool.invalidateRunCache(lease.run.agentId)
         poolManager.cooldown(lease, dayMs, errorBody.trim() || 'daily quota exhausted')
         failedPools.add(lease.pool.name)
         poolManager.release(lease)

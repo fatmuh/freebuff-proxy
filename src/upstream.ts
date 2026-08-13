@@ -409,6 +409,19 @@ export class UpstreamClient {
       } catch { /* fall through */ }
     }
 
+    if (statusCode === 429) {
+      try {
+        const parsed = JSON.parse(text)
+        if (parsed.status === 'ip_capped') {
+          return {
+            status: 'ip_capped',
+            message: `ip_capped: ${parsed.activeUsersForIp}/${parsed.limit} on this IP`,
+            retryAfterMs: parsed.retryAfterMs ?? 300_000,
+          } as FreeSessionResponse
+        }
+      } catch { /* fall through */ }
+    }
+
     if (statusCode < 200 || statusCode >= 300) {
       throw new Error(`session request failed: ${statusCode} ${text.trim()}`)
     }

@@ -652,6 +652,13 @@ export class TokenPool {
         case 'country_blocked':
           return { status: state.status.trim(), instanceId: '', expiresAt: null, admittedAt: null, remainingMs: 0, position: 0, queueDepth: 0, estimatedWaitMs: 0 }
 
+        case 'ip_capped': {
+          const retryMs = (state as { retryAfterMs?: number }).retryAfterMs ?? 300_000
+          this.markCooldown(retryMs, 'ip_capped — too many sessions on this proxy IP')
+          this.log(`${this.name}: ip_capped — cooling ${Math.ceil(retryMs / 1000)}s, will retry on different IP`)
+          throw new Error(`ip_capped: ${retryMs}ms cooldown`)
+        }
+
         case 'model_locked': {
           lockedRetries++
           if (lockedRetries > MAX_MODEL_LOCKED_RETRIES) {

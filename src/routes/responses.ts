@@ -6,7 +6,7 @@ import type { Dispatcher } from 'undici'
 import type { ModelPoolManager } from '../model-pool-manager.js'
 import type { ModelRegistry } from '../model-registry.js'
 import type { DB } from '../db.js'
-import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isAccountBannedError, isCountryBlockedError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
+import { openAIError, isSessionInvalid, isRunInvalid, isQuotaError, isRateLimitError, isDailyQuotaExhausted, msUntilNextDay, isAccountBannedError, isCountryBlockedError, extractUpstreamError, sanitizeBodyText, decompressBody, readDecompressedBody } from '../utils.js'
 import { parseFreeModeRetryMs } from '../free-mode-gate.js'
 import { resolveModelId } from '../types.js'
 import { convertResponsesToChat, buildResponseObject } from '../responses-converter.js'
@@ -312,6 +312,20 @@ export function handleResponses(
         error: lastUpstreamError,
         is_stream: isStream ? 1 : 0,
       })
+
+      if (isDailyQuotaExhausted(statusCode, errorBody)) {
+        const dayMs = msUntilNextDay()
+        console.log(
+          `${lease.pool.name}: daily quota exhausted — cooling ${Math.ceil(dayMs / 1000)}s, killing session to free IP slot, failing over`,
+        )
+        lease.pool.invalidateSession('daily quota exhausted')
+        await lease.pool.endSessionNow().catch((err: unknown) => console.log(`${lease.pool.name}: endSession error: ${err}`))
+        lease.pool.invalidateRunCache(lease.run.agentId)
+        poolManager.cooldown(lease, dayMs, errorBody.trim() || 'daily quota exhausted')
+        failedPools.add(lease.pool.name)
+        poolManager.release(lease)
+        continue
+      }
 
       if (isRateLimitError(statusCode, errorBody)) {
         const retryMs = parseFreeModeRetryMs(errorBody) ?? 30 * 60_000

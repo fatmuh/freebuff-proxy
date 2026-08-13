@@ -97,6 +97,7 @@ export interface FreeSessionResponse {
   queuedAt: string
   rateLimit?: SessionRateLimit
   rateLimitsByModel?: RateLimitsByModel
+  retryAfterMs?: number
 }
 
 export interface CachedSession {
