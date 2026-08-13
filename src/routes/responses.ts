@@ -362,9 +362,10 @@ export function handleResponses(
       }
 
       if (isRunInvalid(statusCode, errorBody)) {
-        console.log(`${lease.pool.name}: run ${lease.run.id} invalid, rotating and retrying`)
+        console.log(`${lease.pool.name}: run ${lease.run.id} invalid, creating fresh run on same account`)
+        lease.pool.invalidateRunCache(lease.run.agentId)
         poolManager.invalidate(lease, errorBody.trim())
-        failedPools.add(lease.pool.name)
+        // Don't add to failedPools — account is healthy, just needs a fresh run.
         poolManager.release(lease)
         continue
       }
