@@ -10,44 +10,39 @@ if [ -n "$AUTH_JSON_B64" ]; then
   echo "[entrypoint] auth.json injected"
 fi
 
-# Patch auth.json: 
-# 1. Re-assign proxy_id round-robin to DO proxies (proxy-1 through proxy-10)
-# 2. Set ALL accounts to deepseek/deepseek-v4-flash (the model we actually use)
+# Patch auth.json:
+# 1. Re-assign proxy_id round-robin to DO proxies (proxy-1 through proxy-5)
+# 2. Set ALL accounts to deepseek/deepseek-v4-flash
 node -e '
 const fs = require("fs");
 try {
   const data = JSON.parse(fs.readFileSync("data/auth.json", "utf8"));
   if (data.accounts && Array.isArray(data.accounts)) {
     data.accounts.forEach((acc, i) => {
-      acc.proxy_id = "proxy-" + ((i % 10) + 1);
+      acc.proxy_id = "proxy-" + ((i % 5) + 1);
       acc.session_model = "deepseek/deepseek-v4-flash";
     });
     fs.writeFileSync("data/auth.json", JSON.stringify(data, null, 2));
-    console.log("[entrypoint] patched " + data.accounts.length + " accounts: proxy_id round-robin + session_model=flash");
+    console.log("[entrypoint] patched " + data.accounts.length + " accounts: proxy_id round-robin(5) + session_model=flash");
   }
 } catch (e) {
   console.error("[entrypoint] failed to patch auth.json:", e.message);
 }
 '
 
-# Register DigitalOcean proxies on startup (10 unique IPs across 10 regions)
+# Register DigitalOcean proxies on startup (5 unique IPs)
 (
   sleep 8
-  echo "[entrypoint] registering 10 DO proxies..."
+  echo "[entrypoint] registering 5 DO proxies..."
   DO_USER="${DO_PROXY_USER:-fb}"
   DO_PASS="${DO_PROXY_PASS:-269c809c3c4ce873}"
   idx=1
   for entry in \
-    "157.230.247.151:3128:DO-SGP1-1" \
-    "159.223.32.16:3128:DO-SGP1-2" \
-    "104.131.38.73:3128:DO-NYC3-3" \
-    "146.190.22.253:3128:DO-AMS3-4" \
-    "165.227.157.114:3128:DO-FRA1-5" \
-    "139.59.180.46:3128:DO-LON1-6" \
-    "159.89.112.231:3128:DO-TOR1-7" \
-    "168.144.113.165:3128:DO-BLR1-8" \
-    "209.38.81.119:3128:DO-SYD1-9" \
-    "146.190.122.10:3128:DO-SFO3-10"
+    "165.22.250.105:3128:DO-SGP1" \
+    "104.236.101.57:3128:DO-NYC3" \
+    "164.92.145.22:3128:DO-AMS3" \
+    "68.183.68.237:3128:DO-FRA1" \
+    "139.59.165.183:3128:DO-LON1"
   do
     IFS=':' read host port name <<EOF
 $entry
