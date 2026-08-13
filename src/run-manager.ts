@@ -359,6 +359,12 @@ export class TokenPool {
     const instanceId = await this.ensureSession()
     if (verbose) this.log(`${this.name}: session instanceId=${instanceId ?? 'none'}`)
 
+    // If session creation failed (ip_capped, banned, etc.), don't proceed —
+    // let model-pool-manager try the next account.
+    if (!instanceId) {
+      throw new Error(`${this.name}: no session available${this.lastError ? ': ' + this.lastError : ''}`)
+    }
+
     // ─── Run ID Caching ───────────────────────────────────────────
     // Codebuff counts START calls against the daily/hourly quota.
     // Reuse the same run_id across requests within the TTL window,
