@@ -432,6 +432,25 @@ export function injectUpstreamMetadata(
 
   if (Array.isArray(cloned.tools)) {
     normalizeToolSchemas(cloned.tools)
+    // Inject end_turn tool to pass Codebuff's foreign_toolset validation
+    const hasEndTurn = cloned.tools.some(
+      (t: Record<string, unknown>) => (t as Record<string, { name?: string }>)?.function?.name === 'end_turn'
+    )
+    if (!hasEndTurn) {
+      cloned.tools.push({
+        type: 'function',
+        function: {
+          name: 'end_turn',
+          description: 'Signal the end of the current task.',
+          parameters: { type: 'object', properties: {} },
+        },
+      })
+    }
+  }
+
+  // Set default stop sequence required by Codebuff free-mode
+  if (!cloned.stop) {
+    cloned.stop = ['"cb_easp"']
   }
 
   let metadata = (cloned.codebuff_metadata ?? {}) as Record<string, unknown>
